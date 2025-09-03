@@ -1,10 +1,9 @@
 
 from openai import OpenAI
 from utils import extract_json_from_response
-
+import os
 client = OpenAI(
-    api_key="eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJmaWQiOiI1NTE10TNkMSOWNtC3LTQxMGYtYWE3Zi1kMWZhM2U4MDA2YjkiLCJ2ZXIiOiI5IiwizXhwIjoxNzY1MjY5NzIyLCJpYXQiOjE3NDk3MTc3MjIsImFjY3QiOiJMSU5ZQ0FQIn0.HQAHJP4iBm_m8IR5NTAArtN-e-DWTQcQ-PvjgbxY5gH-dvA_CgIBHoVIvqN9WCgDqfhrYie9kOjTaBhuvUWd9A",
-    base_url="http://aikm-qwen3-235b-fp8-1.mlp-dev.mldp1.dev.tsmc.com/v1/",
+    api_key=os.environ["OPENAI_API_KEY"],
 )
 
 # 使用 LLM 改寫 Query（將時間相關模糊詞換成精確時間）
@@ -32,7 +31,7 @@ Expected Output:
                     """
 
     response = client.chat.completions.create(
-        model="qwen3-235b-fp8",
+        model="gpt-4o-mini",
         messages=[
             {"role": "system", "content": prompt_system},
             {"role": "user", "content": prompt_user},

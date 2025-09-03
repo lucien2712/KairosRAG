@@ -5,6 +5,7 @@ from rewriter import rewriter
 import os
 import json
 
+
 async def main():
     try:
         # 初始化 RAG object
@@ -22,77 +23,63 @@ async def main():
         conversation_history = []
 
         mode = "hybrid"
-        while True:
-            # print("Please enter your query (Enter 'q' to exit.)\n")
+        
 
-            query = """
-            Based on [Company]: Apple, [Target Calendar Year]: 2025 Q2, 
-            [Theme]: Tariffs and Supply Chain Diversification, analyze the latest developments from an analyst’s perspective. 
-            Summarize the content with a focus on cross-quarter and cross-company comparisons (including competitors and partners), 
-            trend forecasting, and potential impacts on future revenue and financial reports. 
-            Include the timing of key events and contrast the latest data with previous periods for enhanced analytical insights. 
-            Additionally, identify any potential underlying issues that might affect TSMC.
-            """
+        query = """
+        Based on [Company]: Apple, [Target Calendar Year]: 2025 Q2, 
+        [Theme]: Tariffs and Supply Chain Diversification, analyze the latest developments from an analyst’s perspective. 
+        Summarize the content with a focus on cross-quarter, trend forecasting, and potential impacts on future revenue and financial reports. 
+        Include the timing of key events and contrast the latest data with previous periods for enhanced analytical insights. 
+        Additionally, identify any potential underlying issues that might affect TSMC.
+        """
 
-            if query == "q":
-                # 在退出時將 query-rewrite pair 保存到檔案
-                with open(save_path, "w", encoding="utf-8") as f:
-                    json.dump(query_rewrite_pairs, f, ensure_ascii=False, indent=4)
-                break
+        
 
-            # 將時間相關模糊問題進行 rewrite
-            rewritten_query = rewriter(query)
-            print("Rewrite query: ", query)
+        # 將時間相關模糊問題進行 rewrite
+        rewritten_query = rewriter(query)
+        print("Rewrite query: ", query)
 
-            # 保存 query 和 rewritten query 到暫存的結構
-            query_rewrite_pairs.append(
-                {"query": query, "rewritten_query": rewritten_query}
-            )
+        # 保存 query 和 rewritten query 到暫存的結構
+        query_rewrite_pairs.append(
+            {"query": query, "rewritten_query": rewritten_query}
+        )
 
-            response = rag.query(
-                rewritten_query,
-                param=QueryParam(
-                    mode=mode,
-                    # conversation_history
-                    history_turns=3,
-                    max_total_tokens=40960,
-                    enable_rerank=False,
-                    # 這邊可以放兩個是因為有改 prompt
-                    user_prompt="""
-                        /no_think.
+        response = rag.query(
+            rewritten_query,
+            param=QueryParam(
+                mode=mode,
+                # conversation_history
+                history_turns=0,
+                max_total_tokens=120000,
+                enable_rerank=False,
+                user_prompt="""
+                    /no_think.
 
-                        You have to answer the question following the format below:
-                        ## Title
-                        ### Overview
-                        <description: Provide a high-level summary, including scope, purpose, and context.>
+                    You have to answer the question following the format below:
+                    ## Title
+                    ### Overview
+                    <description: Provide a high-level summary, including scope, purpose, and context.>
 
-                        ### Key Themes
-                        <description: Extract the main recurring themes, announcements, priorities, challenges, and opportunities.>
+                    ### Key Themes
+                    <description: Extract the main recurring themes, announcements, priorities, challenges, and opportunities.>
 
-                        ### Comparative Insights
-                        <description: Highlight similarities, differences, shifts in tone, and evolving trends.>
+                    ### Comparative Insights
+                    <description: Highlight similarities, differences, shifts in tone, and evolving trends.>
 
-                        ### Actionable Insights
-                        <description: Summarize practical implications or recommendations (e.g., for strategy, investment, or risk management).>
+                    ### Actionable Insights
+                    <description: Summarize practical implications or recommendations (e.g., for strategy, investment, or risk management).>
 
-                        ### Reference
-                        <description: List ALL sources used, with format [KG/DC] file_path. Ensure every numerical claim and key finding has a corresponding reference.>
-                        """,
-                    response_type="Single Paragraph",
-                    only_need_context=True,
-                ),
-            )
+                    ### Reference
+                    <description: List ALL sources used>
+                    """,
+                response_type="Single Paragraph",
+                only_need_context=False,
+            ),
+        )
 
-            print("===============================")
-            print(response)
-            print("===============================")
-
-            conversation_history.extend(
-                [
-                    {"role": "user", "content": rewritten_query},
-                    {"role": "assistant", "content": response},
-                ]
-            )
+        print("===============================")
+        print(response)
+        print("===============================")
 
     except Exception as e:
         print(f"Fail: {e}")
