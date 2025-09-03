@@ -73,6 +73,7 @@ class TextChunkSchema(TypedDict):
     content: str
     full_doc_id: str
     chunk_order_index: int
+    timestamp: str
 
 
 T = TypeVar("T")

@@ -17,14 +17,14 @@ Given a text document and a list of entity types, identify all entities of those
 1. Recognizing definitively conceptualized entities in text. For each identified entity, extract the following information:
   - entity_name: Name of the entity, use same language as input text. If English, capitalized the name
   - entity_type: Categorize the entity using the provided `Entity_types` list. If a suitable category cannot be determined, classify it as "Other".
-  - entity_description: Provide a comprehensive description of the entity's attributes and activities based on the information present in the input text. To ensure clarity and precision, all descriptions must replace pronouns and referential terms (e.g., "this document," "our company," "I," "you," "he/she") with the specific nouns they represent.
+  - entity_description: Provide a comprehensive description of the entity's attributes and activities based on the information present in the input text. IMPORTANT: If a timestamp is provided, begin the description with the specific time reference (e.g., "{timestamp}: "). If no timestamp is provided but temporal information is available in the text (dates, quarters, years, time periods), begin the description with the specific time reference found in the text. To ensure clarity and precision, all descriptions must replace pronouns and referential terms (e.g., "this document," "our company," "I," "you," "he/she") with the specific nouns they represent.
 2. Format each entity as: ("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
 3. From the entities identified in step 1, identify all pairs of (source_entity, target_entity) that are directly and clearly related based on the text. Unsubstantiated relationships must be excluded from the output.
 For each pair of related entities, extract the following information:
   - source_entity: name of the source entity, as identified in step 1
   - target_entity: name of the target entity, as identified in step 1
   - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details
-  - relationship_description: Explain the nature of the relationship between the source and target entities, providing a clear rationale for their connection
+  - relationship_description: Explain the nature of the relationship between the source and target entities, providing a clear rationale for their connection. IMPORTANT: If a timestamp is provided, begin the description with the specific time reference (e.g., "{timestamp}: "). If no timestamp is provided but temporal information is available in the text, begin the description with the specific time reference found in the text to indicate when this relationship was observed or reported.
 4. Format each relationship as: ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_description>)
 5. Use `{tuple_delimiter}` as field delimiter. Use `{record_delimiter}` as the entity or relation list delimiter.
 6. Return identified entities and relationships in {language}.
@@ -42,6 +42,7 @@ For each pair of related entities, extract the following information:
 
 ---Input---
 Entity_types: [{entity_types}]
+Timestamp: {timestamp}
 Text:
 ```
 {input_text}
@@ -55,6 +56,7 @@ PROMPTS["entity_extraction_examples"] = [
 
 ---Input---
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
+Timestamp: 2024-03-15
 Text:
 ```
 while Alex clenched his jaw, the buzz of frustration dull against the backdrop of Taylor's authoritarian certainty. It was this competitive undercurrent that kept him alert, the sense that his and Jordan's shared commitment to discovery was an unspoken rebellion against Cruz's narrowing vision of control and order.
@@ -67,16 +69,16 @@ It was a small transformation, barely perceptible, but one that Alex noted with 
 ```
 
 ---Output---
-(entity{tuple_delimiter}Alex{tuple_delimiter}person{tuple_delimiter}Alex is a character who experiences frustration and is observant of the dynamics among other characters.){record_delimiter}
-(entity{tuple_delimiter}Taylor{tuple_delimiter}person{tuple_delimiter}Taylor is portrayed with authoritarian certainty and shows a moment of reverence towards a device, indicating a change in perspective.){record_delimiter}
-(entity{tuple_delimiter}Jordan{tuple_delimiter}person{tuple_delimiter}Jordan shares a commitment to discovery and has a significant interaction with Taylor regarding a device.){record_delimiter}
-(entity{tuple_delimiter}Cruz{tuple_delimiter}person{tuple_delimiter}Cruz is associated with a vision of control and order, influencing the dynamics among other characters.){record_delimiter}
-(entity{tuple_delimiter}The Device{tuple_delimiter}equiment{tuple_delimiter}The Device is central to the story, with potential game-changing implications, and is revered by Taylor.){record_delimiter}
-(relationship{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.){record_delimiter}
-(relationship{tuple_delimiter}Alex{tuple_delimiter}Jordan{tuple_delimiter}shared goals, rebellion{tuple_delimiter}Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision.){record_delimiter}
-(relationship{tuple_delimiter}Taylor{tuple_delimiter}Jordan{tuple_delimiter}conflict resolution, mutual respect{tuple_delimiter}Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce.){record_delimiter}
-(relationship{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.){record_delimiter}
-(relationship{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}Taylor shows reverence towards the device, indicating its importance and potential impact.){record_delimiter}
+(entity{tuple_delimiter}Alex{tuple_delimiter}person{tuple_delimiter}2024-03-15: Alex is a character who experiences frustration and is observant of the dynamics among other characters.){record_delimiter}
+(entity{tuple_delimiter}Taylor{tuple_delimiter}person{tuple_delimiter}2024-03-15: Taylor is portrayed with authoritarian certainty and shows a moment of reverence towards a device, indicating a change in perspective.){record_delimiter}
+(entity{tuple_delimiter}Jordan{tuple_delimiter}person{tuple_delimiter}2024-03-15: Jordan shares a commitment to discovery and has a significant interaction with Taylor regarding a device.){record_delimiter}
+(entity{tuple_delimiter}Cruz{tuple_delimiter}person{tuple_delimiter}2024-03-15: Cruz is associated with a vision of control and order, influencing the dynamics among other characters.){record_delimiter}
+(entity{tuple_delimiter}The Device{tuple_delimiter}equiment{tuple_delimiter}2024-03-15: The Device is central to the story, with potential game-changing implications, and is revered by Taylor.){record_delimiter}
+(relationship{tuple_delimiter}Alex{tuple_delimiter}Taylor{tuple_delimiter}power dynamics, observation{tuple_delimiter}2024-03-15: Alex observes Taylor's authoritarian behavior and notes changes in Taylor's attitude toward the device.){record_delimiter}
+(relationship{tuple_delimiter}Alex{tuple_delimiter}Jordan{tuple_delimiter}shared goals, rebellion{tuple_delimiter}2024-03-15: Alex and Jordan share a commitment to discovery, which contrasts with Cruz's vision.){record_delimiter}
+(relationship{tuple_delimiter}Taylor{tuple_delimiter}Jordan{tuple_delimiter}conflict resolution, mutual respect{tuple_delimiter}2024-03-15: Taylor and Jordan interact directly regarding the device, leading to a moment of mutual respect and an uneasy truce.){record_delimiter}
+(relationship{tuple_delimiter}Jordan{tuple_delimiter}Cruz{tuple_delimiter}ideological conflict, rebellion{tuple_delimiter}2024-03-15: Jordan's commitment to discovery is in rebellion against Cruz's vision of control and order.){record_delimiter}
+(relationship{tuple_delimiter}Taylor{tuple_delimiter}The Device{tuple_delimiter}reverence, technological significance{tuple_delimiter}2024-03-15: Taylor shows reverence towards the device, indicating its importance and potential impact.){record_delimiter}
 {completion_delimiter}
 
 """,
@@ -84,6 +86,7 @@ It was a small transformation, barely perceptible, but one that Alex noted with 
 
 ---Input---
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
+Timestamp: 2024-03-14
 Text:
 ```
 Stock markets faced a sharp downturn today as tech giants saw significant declines, with the Global Tech Index dropping by 3.4% in midday trading. Analysts attribute the selloff to investor concerns over rising interest rates and regulatory uncertainty.
@@ -96,18 +99,17 @@ Financial experts are closely watching the Federal Reserve's next move, as specu
 ```
 
 ---Output---
-(entity{tuple_delimiter}Global Tech Index{tuple_delimiter}category{tuple_delimiter}The Global Tech Index tracks the performance of major technology stocks and experienced a 3.4% decline today.){record_delimiter}
-(entity{tuple_delimiter}Nexon Technologies{tuple_delimiter}organization{tuple_delimiter}Nexon Technologies is a tech company that saw its stock decline by 7.8% after disappointing earnings.){record_delimiter}
-(entity{tuple_delimiter}Omega Energy{tuple_delimiter}organization{tuple_delimiter}Omega Energy is an energy company that gained 2.1% in stock value due to rising oil prices.){record_delimiter}
-(entity{tuple_delimiter}Gold Futures{tuple_delimiter}product{tuple_delimiter}Gold futures rose by 1.5%, indicating increased investor interest in safe-haven assets.){record_delimiter}
-(entity{tuple_delimiter}Crude Oil{tuple_delimiter}product{tuple_delimiter}Crude oil prices rose to $87.60 per barrel due to supply constraints and strong demand.){record_delimiter}
-(entity{tuple_delimiter}Market Selloff{tuple_delimiter}category{tuple_delimiter}Market selloff refers to the significant decline in stock values due to investor concerns over interest rates and regulations.){record_delimiter}
-(entity{tuple_delimiter}Federal Reserve Policy Announcement{tuple_delimiter}category{tuple_delimiter}The Federal Reserve's upcoming policy announcement is expected to impact investor confidence and market stability.){record_delimiter}
-(entity{tuple_delimiter}3.4% Decline{tuple_delimiter}category{tuple_delimiter}The Global Tech Index experienced a 3.4% decline in midday trading.){record_delimiter}
-(relationship{tuple_delimiter}Global Tech Index{tuple_delimiter}Market Selloff{tuple_delimiter}market performance, investor sentiment{tuple_delimiter}The decline in the Global Tech Index is part of the broader market selloff driven by investor concerns.){record_delimiter}
-(relationship{tuple_delimiter}Nexon Technologies{tuple_delimiter}Global Tech Index{tuple_delimiter}company impact, index movement{tuple_delimiter}Nexon Technologies' stock decline contributed to the overall drop in the Global Tech Index.){record_delimiter}
-(relationship{tuple_delimiter}Gold Futures{tuple_delimiter}Market Selloff{tuple_delimiter}market reaction, safe-haven investment{tuple_delimiter}Gold prices rose as investors sought safe-haven assets during the market selloff.){record_delimiter}
-(relationship{tuple_delimiter}Federal Reserve Policy Announcement{tuple_delimiter}Market Selloff{tuple_delimiter}interest rate impact, financial regulation{tuple_delimiter}Speculation over Federal Reserve policy changes contributed to market volatility and investor selloff.){record_delimiter}
+(entity{tuple_delimiter}Global Tech Index{tuple_delimiter}category{tuple_delimiter}2024-03-14: The Global Tech Index tracks the performance of major technology stocks and experienced a 3.4% decline in midday trading.){record_delimiter}
+(entity{tuple_delimiter}Nexon Technologies{tuple_delimiter}organization{tuple_delimiter}2024-03-14: Nexon Technologies is a tech company that saw its stock decline by 7.8% after reporting lower-than-expected quarterly earnings.){record_delimiter}
+(entity{tuple_delimiter}Omega Energy{tuple_delimiter}organization{tuple_delimiter}2024-03-14: Omega Energy is an energy company that gained 2.1% in stock value, driven by rising oil prices.){record_delimiter}
+(entity{tuple_delimiter}Gold Futures{tuple_delimiter}product{tuple_delimiter}2024-03-14: Gold futures rose by 1.5% to $2,080 per ounce, indicating increased investor interest in safe-haven assets.){record_delimiter}
+(entity{tuple_delimiter}Crude Oil{tuple_delimiter}product{tuple_delimiter}2024-03-14: Crude oil prices continued their rally, climbing to $87.60 per barrel due to supply constraints and strong demand.){record_delimiter}
+(entity{tuple_delimiter}Market Selloff{tuple_delimiter}category{tuple_delimiter}2024-03-14: Market selloff refers to the significant decline in stock values due to investor concerns over rising interest rates and regulatory uncertainty.){record_delimiter}
+(entity{tuple_delimiter}Federal Reserve Policy Announcement{tuple_delimiter}category{tuple_delimiter}2024-03-14: The Federal Reserve's upcoming policy announcement is expected to impact investor confidence and overall market stability.){record_delimiter}
+(relationship{tuple_delimiter}Global Tech Index{tuple_delimiter}Market Selloff{tuple_delimiter}market performance, investor sentiment{tuple_delimiter}2024-03-14: The decline in the Global Tech Index is part of the broader market selloff driven by investor concerns over rising interest rates.){record_delimiter}
+(relationship{tuple_delimiter}Nexon Technologies{tuple_delimiter}Global Tech Index{tuple_delimiter}company impact, index movement{tuple_delimiter}2024-03-14: Nexon Technologies' 7.8% stock decline contributed to the overall drop in the Global Tech Index.){record_delimiter}
+(relationship{tuple_delimiter}Gold Futures{tuple_delimiter}Market Selloff{tuple_delimiter}market reaction, safe-haven investment{tuple_delimiter}2024-03-14: Gold prices rose as investors sought safe-haven assets during the market selloff.){record_delimiter}
+(relationship{tuple_delimiter}Federal Reserve Policy Announcement{tuple_delimiter}Market Selloff{tuple_delimiter}interest rate impact, financial regulation{tuple_delimiter}2024-03-14: Speculation over Federal Reserve policy changes contributed to market volatility and the investor selloff.){record_delimiter}
 {completion_delimiter}
 
 """,
@@ -115,22 +117,22 @@ Financial experts are closely watching the Federal Reserve's next move, as specu
 
 ---Input---
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
+Timestamp: 2024-07-20
 Text:
 ```
 At the World Athletics Championship in Tokyo, Noah Carter broke the 100m sprint record using cutting-edge carbon-fiber spikes.
 ```
 
 ---Output---
-(entity{tuple_delimiter}World Athletics Championship{tuple_delimiter}event{tuple_delimiter}The World Athletics Championship is a global sports competition featuring top athletes in track and field.){record_delimiter}
-(entity{tuple_delimiter}Tokyo{tuple_delimiter}location{tuple_delimiter}Tokyo is the host city of the World Athletics Championship.){record_delimiter}
-(entity{tuple_delimiter}Noah Carter{tuple_delimiter}person{tuple_delimiter}Noah Carter is a sprinter who set a new record in the 100m sprint at the World Athletics Championship.){record_delimiter}
-(entity{tuple_delimiter}100m Sprint Record{tuple_delimiter}category{tuple_delimiter}The 100m sprint record is a benchmark in athletics, recently broken by Noah Carter.){record_delimiter}
-(entity{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}equipment{tuple_delimiter}Carbon-fiber spikes are advanced sprinting shoes that provide enhanced speed and traction.){record_delimiter}
-(entity{tuple_delimiter}World Athletics Federation{tuple_delimiter}organization{tuple_delimiter}The World Athletics Federation is the governing body overseeing the World Athletics Championship and record validations.){record_delimiter}
-(relationship{tuple_delimiter}World Athletics Championship{tuple_delimiter}Tokyo{tuple_delimiter}event location, international competition{tuple_delimiter}The World Athletics Championship is being hosted in Tokyo.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}100m Sprint Record{tuple_delimiter}athlete achievement, record-breaking{tuple_delimiter}Noah Carter set a new 100m sprint record at the championship.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}athletic equipment, performance boost{tuple_delimiter}Noah Carter used carbon-fiber spikes to enhance performance during the race.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}World Athletics Championship{tuple_delimiter}athlete participation, competition{tuple_delimiter}Noah Carter is competing at the World Athletics Championship.){record_delimiter}
+(entity{tuple_delimiter}World Athletics Championship{tuple_delimiter}event{tuple_delimiter}2024-07-20: The World Athletics Championship is a global sports competition featuring top athletes in track and field, being held in Tokyo.){record_delimiter}
+(entity{tuple_delimiter}Tokyo{tuple_delimiter}location{tuple_delimiter}2024-07-20: Tokyo is the host city of the World Athletics Championship where the 100m sprint record was broken.){record_delimiter}
+(entity{tuple_delimiter}Noah Carter{tuple_delimiter}person{tuple_delimiter}2024-07-20: Noah Carter is a sprinter who broke the 100m sprint record using cutting-edge carbon-fiber spikes at the World Athletics Championship in Tokyo.){record_delimiter}
+(entity{tuple_delimiter}100m Sprint Record{tuple_delimiter}category{tuple_delimiter}2024-07-20: The 100m sprint record is a benchmark in athletics, broken by Noah Carter at the World Athletics Championship.){record_delimiter}
+(entity{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}equipment{tuple_delimiter}2024-07-20: Carbon-fiber spikes are cutting-edge advanced sprinting shoes that Noah Carter used to enhance speed and traction for his record-breaking performance.){record_delimiter}
+(relationship{tuple_delimiter}World Athletics Championship{tuple_delimiter}Tokyo{tuple_delimiter}event location, international competition{tuple_delimiter}2024-07-20: The World Athletics Championship is being hosted in Tokyo where the record-breaking 100m sprint took place.){record_delimiter}
+(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}100m Sprint Record{tuple_delimiter}athlete achievement, record-breaking{tuple_delimiter}2024-07-20: Noah Carter broke the 100m sprint record at the World Athletics Championship in Tokyo.){record_delimiter}
+(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}athletic equipment, performance boost{tuple_delimiter}2024-07-20: Noah Carter used cutting-edge carbon-fiber spikes to enhance his performance during the record-breaking race.){record_delimiter}
+(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}World Athletics Championship{tuple_delimiter}athlete participation, competition{tuple_delimiter}2024-07-20: Noah Carter participated in the World Athletics Championship in Tokyo where he achieved his record-breaking performance.){record_delimiter}
 {completion_delimiter}
 
 """,
@@ -138,22 +140,49 @@ At the World Athletics Championship in Tokyo, Noah Carter broke the 100m sprint 
 
 ---Input---
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
+Timestamp: 2024年3月10日
 Text:
 ```
 在北京举行的人工智能大会上，腾讯公司的首席技术官张伟发布了最新的大语言模型"腾讯智言"，该模型在自然语言处理方面取得了重大突破。
 ```
 
 ---Output---
-(entity{tuple_delimiter}人工智能大会{tuple_delimiter}event{tuple_delimiter}人工智能大会是在北京举行的技术会议，专注于人工智能领域的最新发展。){record_delimiter}
-(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}北京是人工智能大会的举办城市。){record_delimiter}
-(entity{tuple_delimiter}腾讯公司{tuple_delimiter}organization{tuple_delimiter}腾讯公司是参与人工智能大会的科技企业，发布了新的语言模型产品。){record_delimiter}
-(entity{tuple_delimiter}张伟{tuple_delimiter}person{tuple_delimiter}张伟是腾讯公司的首席技术官，在大会上发布了新产品。){record_delimiter}
-(entity{tuple_delimiter}腾讯智言{tuple_delimiter}product{tuple_delimiter}腾讯智言是腾讯公司发布的大语言模型产品，在自然语言处理方面有重大突破。){record_delimiter}
-(entity{tuple_delimiter}自然语言处理技术{tuple_delimiter}technology{tuple_delimiter}自然语言处理技术是腾讯智言模型取得重大突破的技术领域。){record_delimiter}
-(relationship{tuple_delimiter}人工智能大会{tuple_delimiter}北京{tuple_delimiter}会议地点, 举办关系{tuple_delimiter}人工智能大会在北京举行。){record_delimiter}
-(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯公司{tuple_delimiter}雇佣关系, 高管职位{tuple_delimiter}张伟担任腾讯公司的首席技术官。){record_delimiter}
-(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯智言{tuple_delimiter}产品发布, 技术展示{tuple_delimiter}张伟在大会上发布了腾讯智言大语言模型。){record_delimiter}
-(relationship{tuple_delimiter}腾讯智言{tuple_delimiter}自然语言处理技术{tuple_delimiter}技术应用, 突破创新{tuple_delimiter}腾讯智言在自然语言处理技术方面取得了重大突破。){record_delimiter}
+(entity{tuple_delimiter}人工智能大会{tuple_delimiter}event{tuple_delimiter}2024年3月10日: 人工智能大会是在北京举行的技术会议，专注于人工智能领域的最新发展，腾讯公司在此发布了新产品。){record_delimiter}
+(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}2024年3月10日: 北京是人工智能大会的举办城市，见证了腾讯智言大语言模型的重要发布。){record_delimiter}
+(entity{tuple_delimiter}腾讯公司{tuple_delimiter}organization{tuple_delimiter}2024年3月10日: 腾讯公司是参与人工智能大会的科技企业，通过首席技术官张伟发布了新的大语言模型产品。){record_delimiter}
+(entity{tuple_delimiter}张伟{tuple_delimiter}person{tuple_delimiter}2024年3月10日: 张伟是腾讯公司的首席技术官，在北京举行的人工智能大会上发布了腾讯智言产品。){record_delimiter}
+(entity{tuple_delimiter}腾讯智言{tuple_delimiter}product{tuple_delimiter}2024年3月10日: 腾讯智言是腾讯公司在人工智能大会上发布的大语言模型产品，在自然语言处理方面取得了重大突破。){record_delimiter}
+(entity{tuple_delimiter}自然语言处理技术{tuple_delimiter}technology{tuple_delimiter}2024年3月10日: 自然语言处理技术是腾讯智言模型取得重大突破的技术领域，展现了最新发展成果。){record_delimiter}
+(relationship{tuple_delimiter}人工智能大会{tuple_delimiter}北京{tuple_delimiter}会议地点, 举办关系{tuple_delimiter}2024年3月10日: 人工智能大会在北京举行，成为腾讯等科技企业展示最新技术的重要平台。){record_delimiter}
+(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯公司{tuple_delimiter}雇佣关系, 高管职位{tuple_delimiter}2024年3月10日: 张伟担任腾讯公司的首席技术官，代表公司在人工智能大会上进行重要产品发布。){record_delimiter}
+(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯智言{tuple_delimiter}产品发布, 技术展示{tuple_delimiter}2024年3月10日: 张伟在人工智能大会上发布了腾讯智言大语言模型，展示了公司在AI领域的技术实力。){record_delimiter}
+(relationship{tuple_delimiter}腾讯智言{tuple_delimiter}自然语言处理技术{tuple_delimiter}技术应用, 突破创新{tuple_delimiter}2024年3月10日: 腾讯智言在自然语言处理技术方面取得了重大突破，代表了该领域的最新进展。){record_delimiter}
+{completion_delimiter}
+
+""",
+    """[Example 5 - Temporal Financial Information]
+
+---Input---
+Entity_types: [organization,person,location,event,technology,equipment,product,Document,category,financial_metric]
+Timestamp: 2024-07-31 Q3 2024
+Text:
+```
+During Apple's Q3 2024 earnings call on July 31, 2024, CEO Tim Cook announced that iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to Q3 2023. The company also reported that Services revenue grew to $24.2 billion, up 14% year-over-year. Cook highlighted that despite supply chain challenges with key supplier TSMC, Apple maintained strong performance in the Greater China region with $14.7 billion in revenue.
+```
+
+---Output---
+(entity{tuple_delimiter}Apple{tuple_delimiter}organization{tuple_delimiter}Q3 2024: Apple is a technology company that reported quarterly earnings on July 31, 2024, showing mixed performance across product categories.){record_delimiter}
+(entity{tuple_delimiter}Tim Cook{tuple_delimiter}person{tuple_delimiter}Q3 2024: Tim Cook is Apple's CEO who presented the company's Q3 2024 earnings results on July 31, 2024.){record_delimiter}
+(entity{tuple_delimiter}iPhone Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024: iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to Q3 2023.){record_delimiter}
+(entity{tuple_delimiter}Services Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024: Services revenue grew to $24.2 billion, up 14% year-over-year from Q3 2023.){record_delimiter}
+(entity{tuple_delimiter}TSMC{tuple_delimiter}organization{tuple_delimiter}Q3 2024: TSMC is identified as a key supplier to Apple experiencing supply chain challenges during Q3 2024.){record_delimiter}
+(entity{tuple_delimiter}Greater China Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024: Greater China region generated $14.7 billion in revenue for Apple during Q3 2024.){record_delimiter}
+(entity{tuple_delimiter}Q3 2024 Earnings Call{tuple_delimiter}event{tuple_delimiter}Q3 2024: Apple's quarterly earnings call held on July 31, 2024, where financial results and strategic updates were announced.){record_delimiter}
+(relationship{tuple_delimiter}Tim Cook{tuple_delimiter}Apple{tuple_delimiter}leadership, earnings presentation{tuple_delimiter}Q3 2024: Tim Cook serves as Apple's CEO and presented the company's Q3 2024 earnings results.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}iPhone Revenue{tuple_delimiter}product performance, financial results{tuple_delimiter}Q3 2024: Apple reported iPhone revenue of $39.3 billion, showing a 1.5% decline from the previous year.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}Services Revenue{tuple_delimiter}business segment, growth performance{tuple_delimiter}Q3 2024: Apple's Services division generated $24.2 billion in revenue, demonstrating 14% year-over-year growth.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}TSMC{tuple_delimiter}supplier relationship, supply chain challenges{tuple_delimiter}Q3 2024: Apple faces supply chain challenges with key supplier TSMC during the third quarter.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}Greater China Revenue{tuple_delimiter}regional performance, market presence{tuple_delimiter}Q3 2024: Apple maintained strong performance in Greater China with $14.7 billion in quarterly revenue.){record_delimiter}
 {completion_delimiter}
 
 """,
@@ -168,10 +197,11 @@ Your task is to synthesize a list of descriptions of a given entity or relation 
 ---Instructions---
 1. **Comprehensiveness:** The summary must integrate key information from all provided descriptions. Do not omit important facts.
 2. **Context:** The summary must explicitly mention the name of the entity or relation for full context.
-3. **Conflict:** In case of conflicting or inconsistent descriptions, determine if they originate from multiple, distinct entities or relationships that share the same name. If so, summarize each entity or relationship separately and then consolidate all summaries.
-4. **Style:** The output must be written from an objective, third-person perspective.
-5. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.
-6. **Language:** The entire output must be written in {language}.
+3. **Temporal Information:** When descriptions contain temporal information (dates, quarters, years, time periods), preserve and organize this information chronologically. Present the most recent information prominently while maintaining historical context.
+4. **Conflict:** In case of conflicting or inconsistent descriptions, determine if they originate from multiple, distinct entities or relationships that share the same name. If so, summarize each entity or relationship separately and then consolidate all summaries.
+5. **Style:** The output must be written from an objective, third-person perspective.
+6. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.
+7. **Language:** The entire output must be written in {language}.
 
 ---Data---
 {description_type} Name: {description_name}

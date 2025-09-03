@@ -1782,13 +1782,15 @@ async def extract_entities(
         content = chunk_dp["content"]
         # Get file path from chunk data or use default
         file_path = chunk_dp.get("file_path", "unknown_source")
+        # Get timestamp from chunk data
+        timestamp = chunk_dp.get("timestamp", "")
 
         # Create cache keys collector for batch processing
         cache_keys_collector = []
 
         # Get initial extraction
         hint_prompt = entity_extract_prompt.format(
-            **{**context_base, "input_text": content}
+            **{**context_base, "input_text": content, "timestamp": timestamp}
         )
 
         final_result = await use_llm_func_with_cache(

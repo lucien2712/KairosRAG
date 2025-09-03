@@ -52,7 +52,7 @@ async def main():
         texts, file_paths = process_files_to_list("./input")
 
         if texts:
-            rag.insert(texts, file_paths=file_paths)
+            rag.insert(texts, file_paths=file_paths, timestamps="Q3 2024")
             print("Graph building success!")
         else:
             print("No valid PDF content found, graph not built.")

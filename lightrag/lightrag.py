@@ -867,6 +867,7 @@ class LightRAG:
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
         file_paths: str | list[str] | None = None,
+        timestamps: str | list[str] | None = None,
         track_id: str | None = None,
     ) -> str:
         """Sync Insert documents with checkpoint support
@@ -879,6 +880,7 @@ class LightRAG:
             split_by_character is None, this parameter is ignored.
             ids: single string of the document ID or list of unique document IDs, if not provided, MD5 hash IDs will be generated
             file_paths: single string of the file path or list of file paths, used for citation
+            timestamps: single string or list of timestamps for each document, used for temporal entity/relation descriptions
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
 
         Returns:
@@ -892,6 +894,7 @@ class LightRAG:
                 split_by_character_only,
                 ids,
                 file_paths,
+                timestamps,
                 track_id,
             )
         )
@@ -903,6 +906,7 @@ class LightRAG:
         split_by_character_only: bool = False,
         ids: str | list[str] | None = None,
         file_paths: str | list[str] | None = None,
+        timestamps: str | list[str] | None = None,
         track_id: str | None = None,
     ) -> str:
         """Async Insert documents with checkpoint support
@@ -915,6 +919,7 @@ class LightRAG:
             split_by_character is None, this parameter is ignored.
             ids: list of unique document IDs, if not provided, MD5 hash IDs will be generated
             file_paths: list of file paths corresponding to each document, used for citation
+            timestamps: list of timestamps corresponding to each document, used for temporal entity/relation descriptions
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
 
         Returns:
@@ -924,7 +929,7 @@ class LightRAG:
         if track_id is None:
             track_id = generate_track_id("insert")
 
-        await self.apipeline_enqueue_documents(input, ids, file_paths, track_id)
+        await self.apipeline_enqueue_documents(input, ids, file_paths, timestamps, track_id)
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
@@ -1008,6 +1013,7 @@ class LightRAG:
         input: str | list[str],
         ids: list[str] | None = None,
         file_paths: str | list[str] | None = None,
+        timestamps: str | list[str] | None = None,
         track_id: str | None = None,
     ) -> str:
         """
@@ -1022,6 +1028,7 @@ class LightRAG:
             input: Single document string or list of document strings
             ids: list of unique document IDs, if not provided, MD5 hash IDs will be generated
             file_paths: list of file paths corresponding to each document, used for citation
+            timestamps: list of timestamps corresponding to each document, used for temporal entity/relation descriptions
             track_id: tracking ID for monitoring processing status, if not provided, will be generated with "enqueue" prefix
 
         Returns:
@@ -1036,6 +1043,8 @@ class LightRAG:
             ids = [ids]
         if isinstance(file_paths, str):
             file_paths = [file_paths]
+        if isinstance(timestamps, str):
+            timestamps = [timestamps]
 
         # If file_paths is provided, ensure it matches the number of documents
         if file_paths is not None:
@@ -1049,6 +1058,18 @@ class LightRAG:
             # If no file paths provided, use placeholder
             file_paths = ["unknown_source"] * len(input)
 
+        # If timestamps is provided, ensure it matches the number of documents
+        if timestamps is not None:
+            if isinstance(timestamps, str):
+                timestamps = [timestamps]
+            if len(timestamps) != len(input):
+                raise ValueError(
+                    "Number of timestamps must match the number of documents"
+                )
+        else:
+            # If no timestamps provided, use empty string as placeholder
+            timestamps = [""] * len(input)
+
         # 1. Validate ids if provided or generate MD5 hash IDs and remove duplicate contents
         if ids is not None:
             # Check if the number of IDs matches the number of documents
@@ -1061,31 +1082,32 @@ class LightRAG:
 
             # Generate contents dict and remove duplicates in one pass
             unique_contents = {}
-            for id_, doc, path in zip(ids, input, file_paths):
+            for id_, doc, path, timestamp in zip(ids, input, file_paths, timestamps):
                 cleaned_content = sanitize_text_for_encoding(doc)
                 if cleaned_content not in unique_contents:
-                    unique_contents[cleaned_content] = (id_, path)
+                    unique_contents[cleaned_content] = (id_, path, timestamp)
 
             # Reconstruct contents with unique content
             contents = {
-                id_: {"content": content, "file_path": file_path}
-                for content, (id_, file_path) in unique_contents.items()
+                id_: {"content": content, "file_path": file_path, "timestamp": timestamp}
+                for content, (id_, file_path, timestamp) in unique_contents.items()
             }
         else:
             # Clean input text and remove duplicates in one pass
-            unique_content_with_paths = {}
-            for doc, path in zip(input, file_paths):
+            unique_content_with_metadata = {}
+            for doc, path, timestamp in zip(input, file_paths, timestamps):
                 cleaned_content = sanitize_text_for_encoding(doc)
-                if cleaned_content not in unique_content_with_paths:
-                    unique_content_with_paths[cleaned_content] = path
+                if cleaned_content not in unique_content_with_metadata:
+                    unique_content_with_metadata[cleaned_content] = (path, timestamp)
 
-            # Generate contents dict of MD5 hash IDs and documents with paths
+            # Generate contents dict of MD5 hash IDs and documents with metadata
             contents = {
                 compute_mdhash_id(content, prefix="doc-"): {
                     "content": content,
                     "file_path": path,
+                    "timestamp": timestamp,
                 }
-                for content, path in unique_content_with_paths.items()
+                for content, (path, timestamp) in unique_content_with_metadata.items()
             }
 
         # 2. Generate document initial status (without content)
@@ -1100,6 +1122,7 @@ class LightRAG:
                     "file_path"
                 ],  # Store file path in document status
                 "track_id": track_id,  # Store track_id in document status
+                "metadata": {"timestamp": content_data.get("timestamp", "")},  # Store timestamp in metadata
             }
             for id_, content_data in contents.items()
         }
@@ -1513,11 +1536,14 @@ class LightRAG:
                             content = content_data["content"]
 
                             # Generate chunks from document
+                            # Get timestamp from status_doc metadata
+                            timestamp = status_doc.metadata.get("timestamp", "") if status_doc.metadata else ""
                             chunks: dict[str, Any] = {
                                 compute_mdhash_id(dp["content"], prefix="chunk-"): {
                                     **dp,
                                     "full_doc_id": doc_id,
                                     "file_path": file_path,  # Add file path to each chunk
+                                    "timestamp": timestamp,  # Add timestamp to each chunk
                                     "llm_cache_list": [],  # Initialize empty LLM cache list for each chunk
                                 }
                                 for dp in self.chunking_func(
