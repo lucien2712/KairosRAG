@@ -19,8 +19,7 @@ async def main():
         save_path = os.path.join(working_dir, "query_rewrite_pairs.json")
         query_rewrite_pairs = []
 
-        # 對話紀錄儲存
-        conversation_history = []
+
 
         mode = "hybrid"
         
@@ -51,6 +50,8 @@ async def main():
                 # conversation_history
                 history_turns=0,
                 max_total_tokens=120000,
+                max_hop=1,
+                max_neighbors= 30,
                 enable_rerank=False,
                 user_prompt="""
                     /no_think.

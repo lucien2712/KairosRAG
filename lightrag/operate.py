@@ -2197,7 +2197,6 @@ async def _multi_hop_expand(
         return [], []
     
     logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, max_neighbors={query_param.max_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
-    logger.info(f"Seed nodes: {len(seed_nodes)}, names: {[n.get('entity_name') for n in seed_nodes]}")
     
     all_expanded_entities = []
     all_expanded_relations = []
@@ -3002,7 +3001,7 @@ async def _build_query_context(
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "timestamp": chunk.get("timestamp", ""),
+                    "The content is occured at": chunk.get("timestamp", ""),
                 }
             )
 
@@ -3066,7 +3065,6 @@ async def _build_query_context(
     if query_param.max_hop > 0 and (entities_context or relations_context):
         logger.info(f"Performing multi-hop expansion with max_hop={query_param.max_hop}")
         logger.info(f"Initial entities: {len(entities_context)}, relations: {len(relations_context)}")
-        logger.info(f"Seed entities: {[e.get('entity_name') for e in final_entities[:5]]}")
         
         # Collect seed nodes for multi-hop expansion
         seed_nodes = final_entities.copy()
@@ -3082,7 +3080,7 @@ async def _build_query_context(
             query_param=query_param,
         )
         
-        # Merge expanded results with existing context
+        # Merge expanded results with existing context using round-robin
         if expanded_entities:
             # Create context format for expanded entities
             expanded_entities_context = []
@@ -3094,7 +3092,7 @@ async def _build_query_context(
                 file_path = n.get("file_path", "unknown_source")
                 
                 expanded_entities_context.append({
-                    "id": len(entities_context) + i + 1,
+                    "id": 0,  # Will be reassigned after round-robin merge
                     "entity": n["entity_name"],
                     "type": n.get("entity_type", "UNKNOWN"),
                     "description": n.get("description", "UNKNOWN"),
@@ -3102,10 +3100,28 @@ async def _build_query_context(
                     "file_path": file_path,
                 })
             
-            # Keep file_path and created_at for expanded entities
+            # Round-robin merge initial and expanded entities
+            original_entities = entities_context.copy()
+            entities_context = []
+            seen_entities = set()
             
-            # Merge with existing entities context
-            entities_context.extend(expanded_entities_context)
+            max_len = max(len(original_entities), len(expanded_entities_context))
+            for i in range(max_len):
+                # First from original (initial query results)
+                if i < len(original_entities):
+                    entity = original_entities[i]
+                    entity_name = entity.get("entity")
+                    if entity_name and entity_name not in seen_entities:
+                        entities_context.append(entity)
+                        seen_entities.add(entity_name)
+                
+                # Then from expanded (multi-hop results)
+                if i < len(expanded_entities_context):
+                    entity = expanded_entities_context[i]
+                    entity_name = entity.get("entity")
+                    if entity_name and entity_name not in seen_entities:
+                        entities_context.append(entity)
+                        seen_entities.add(entity_name)
         
         if expanded_relations:
             # Create context format for expanded relations
@@ -3123,7 +3139,7 @@ async def _build_query_context(
                     entity1, entity2 = e.get("src_id"), e.get("tgt_id")
                 
                 expanded_relations_context.append({
-                    "id": len(relations_context) + i + 1,
+                    "id": 0,  # Will be reassigned after round-robin merge
                     "entity1": entity1,
                     "entity2": entity2,
                     "description": e.get("description", "UNKNOWN"),
@@ -3131,10 +3147,28 @@ async def _build_query_context(
                     "file_path": file_path,
                 })
             
-            # Keep file_path and created_at for expanded relations
+            # Round-robin merge initial and expanded relations
+            original_relations = relations_context.copy()
+            relations_context = []
+            seen_relations = set()
             
-            # Merge with existing relations context
-            relations_context.extend(expanded_relations_context)
+            max_len = max(len(original_relations), len(expanded_relations_context))
+            for i in range(max_len):
+                # First from original (initial query results)
+                if i < len(original_relations):
+                    relation = original_relations[i]
+                    rel_key = tuple(sorted([relation.get("entity1"), relation.get("entity2")]))
+                    if rel_key not in seen_relations:
+                        relations_context.append(relation)
+                        seen_relations.add(rel_key)
+                
+                # Then from expanded (multi-hop results) 
+                if i < len(expanded_relations_context):
+                    relation = expanded_relations_context[i]
+                    rel_key = tuple(sorted([relation.get("entity1"), relation.get("entity2")]))
+                    if rel_key not in seen_relations:
+                        relations_context.append(relation)
+                        seen_relations.add(rel_key)
         
         logger.info(f"Multi-hop expansion completed: added {len(expanded_entities)} entities, {len(expanded_relations)} relations")
         
@@ -3198,7 +3232,7 @@ async def _build_query_context(
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "timestamp": chunk.get("timestamp", ""),
+                    "The content is occured at": chunk.get("timestamp", ""),
                 })
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
@@ -3930,7 +3964,7 @@ async def naive_query(
                 "id": i + 1,
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
-                "timestamp": chunk.get("timestamp", ""),
+                "The content is occured at": chunk.get("timestamp", ""),
             }
         )
 
