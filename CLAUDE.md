@@ -17,18 +17,6 @@ pip install -e .
 pip install -e ".[api]"
 ```
 
-### Server Setup
-```bash
-# Copy configuration
-cp env.example .env
-
-# Start server
-lightrag-server
-
-# Or with Docker
-docker compose up
-```
-
 ## Core Architecture
 
 ### Main Components

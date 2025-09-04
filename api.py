@@ -95,12 +95,9 @@ async def system(query, mode, conversation_history, history_turns):
                 mode=mode,
                 conversation_history=conversation_history,
                 history_turns=history_turns,
-                max_total_tokens=40960,
+                max_total_tokens=120000,
                 enable_rerank=False,
-                user_prompt=[
-                    "/no_think.",
-                    f"The current date is **{current_date}**, and we are currently in **{quarter}**.",
-                ],
+                user_prompt="n/a",
                 response_type="Single Paragraph",
             ),
         )

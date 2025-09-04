@@ -116,3 +116,7 @@
   研究性創新：
   6. Reasoning-Enhanced Generation - 推理能力
   7. Federated Integration - 分散式學習
+
+
+1. Probabilistic Reasoning Algorithm (主要創新) │ │ │ │ - 目標：為 GraphRAG 引入貝葉斯不確定性推理 │ │ - 技術：知識圖譜到貝葉斯網絡轉換 + 概率推理引擎
+2. 同義詞 entity merge

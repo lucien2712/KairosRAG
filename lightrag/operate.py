@@ -313,6 +313,7 @@ async def _handle_single_entity_extraction(
     record_attributes: list[str],
     chunk_key: str,
     file_path: str = "unknown_source",
+    timestamp: str = "",
 ):
     if len(record_attributes) < 4 or "entity" not in record_attributes[0]:
         if len(record_attributes) > 1 and "entity" in record_attributes[0]:
@@ -359,6 +360,10 @@ async def _handle_single_entity_extraction(
             )
             return None
 
+        # Automatically prepend timestamp to description if provided and not already present
+        if timestamp.strip() and not entity_description.startswith(timestamp):
+            entity_description = f"{timestamp}: {entity_description}"
+
         return dict(
             entity_name=entity_name,
             entity_type=entity_type,
@@ -383,6 +388,7 @@ async def _handle_single_relationship_extraction(
     record_attributes: list[str],
     chunk_key: str,
     file_path: str = "unknown_source",
+    timestamp: str = "",
 ):
     if len(record_attributes) < 5 or "relationship" not in record_attributes[0]:
         if len(record_attributes) > 1 and "relationship" in record_attributes[0]:
@@ -427,6 +433,10 @@ async def _handle_single_relationship_extraction(
 
         # Process relationship description with same cleaning pipeline
         edge_description = sanitize_and_normalize_extracted_text(record_attributes[4])
+
+        # Automatically prepend timestamp to description if provided and not already present
+        if timestamp.strip() and not edge_description.startswith(timestamp):
+            edge_description = f"{timestamp}: {edge_description}"
 
         edge_source_id = chunk_key
         weight = (
@@ -800,6 +810,7 @@ async def _process_extraction_result(
     result: str,
     chunk_key: str,
     file_path: str = "unknown_source",
+    timestamp: str = "",
     tuple_delimiter: str = "<|>",
     record_delimiter: str = "##",
     completion_delimiter: str = "<|COMPLETE|>",
@@ -859,7 +870,7 @@ async def _process_extraction_result(
 
         # Try to parse as entity
         entity_data = await _handle_single_entity_extraction(
-            record_attributes, chunk_key, file_path
+            record_attributes, chunk_key, file_path, timestamp
         )
         if entity_data is not None:
             maybe_nodes[entity_data["entity_name"]].append(entity_data)
@@ -867,7 +878,7 @@ async def _process_extraction_result(
 
         # Try to parse as relationship
         relationship_data = await _handle_single_relationship_extraction(
-            record_attributes, chunk_key, file_path
+            record_attributes, chunk_key, file_path, timestamp
         )
         if relationship_data is not None:
             maybe_edges[
@@ -891,12 +902,17 @@ async def _parse_extraction_result(
         Tuple of (entities_dict, relationships_dict)
     """
 
-    # Get chunk data for file_path from storage
+    # Get chunk data for file_path and timestamp from storage
     chunk_data = await text_chunks_storage.get_by_id(chunk_id)
     file_path = (
         chunk_data.get("file_path", "unknown_source")
         if chunk_data
         else "unknown_source"
+    )
+    timestamp = (
+        chunk_data.get("timestamp", "")
+        if chunk_data
+        else ""
     )
 
     # Call the shared processing function
@@ -904,6 +920,7 @@ async def _parse_extraction_result(
         extraction_result,
         chunk_id,
         file_path,
+        timestamp,
         tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
         record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
         completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
@@ -1805,11 +1822,12 @@ async def extract_entities(
         # Store LLM cache reference in chunk (will be handled by use_llm_func_with_cache)
         history = pack_user_ass_to_openai_messages(hint_prompt, final_result)
 
-        # Process initial extraction with file path
+        # Process initial extraction with file path and timestamp
         maybe_nodes, maybe_edges = await _process_extraction_result(
             final_result,
             chunk_key,
             file_path,
+            timestamp,
             tuple_delimiter=context_base["tuple_delimiter"],
             record_delimiter=context_base["record_delimiter"],
             completion_delimiter=context_base["completion_delimiter"],
@@ -1829,11 +1847,12 @@ async def extract_entities(
 
             history += pack_user_ass_to_openai_messages(continue_prompt, glean_result)
 
-            # Process gleaning result separately with file path
+            # Process gleaning result separately with file path and timestamp
             glean_nodes, glean_edges = await _process_extraction_result(
                 glean_result,
                 chunk_key,
                 file_path,
+                timestamp,
                 tuple_delimiter=context_base["tuple_delimiter"],
                 record_delimiter=context_base["record_delimiter"],
                 completion_delimiter=context_base["completion_delimiter"],
@@ -2747,11 +2766,9 @@ async def _build_query_context(
     if entities_context:
         # Process entities context to replace GRAPH_FIELD_SEP with : in file_path fields
         for entity in entities_context:
-            # remove file_path and created_at
-            entity.pop("file_path", None)
-            entity.pop("created_at", None)
-            # if "file_path" in entity and entity["file_path"]:
-            #     entity["file_path"] = entity["file_path"].replace(GRAPH_FIELD_SEP, ";")
+            # Keep file_path and created_at for all entities
+            if "file_path" in entity and entity["file_path"]:
+                entity["file_path"] = entity["file_path"].replace(GRAPH_FIELD_SEP, ";")
 
         entities_context = truncate_list_by_token_size(
             entities_context,
@@ -2764,13 +2781,11 @@ async def _build_query_context(
     if relations_context:
         # Process relations context to replace GRAPH_FIELD_SEP with : in file_path fields
         for relation in relations_context:
-            # remove file_path and created_at
-            relation.pop("file_path", None)
-            relation.pop("created_at", None)
-            # if "file_path" in relation and relation["file_path"]:
-            #     relation["file_path"] = relation["file_path"].replace(
-            #         GRAPH_FIELD_SEP, ";"
-            #     )
+            # Keep file_path and created_at for all relations
+            if "file_path" in relation and relation["file_path"]:
+                relation["file_path"] = relation["file_path"].replace(
+                    GRAPH_FIELD_SEP, ";"
+                )
 
         relations_context = truncate_list_by_token_size(
             relations_context,
@@ -2987,6 +3002,7 @@ async def _build_query_context(
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
+                    "timestamp": chunk.get("timestamp", ""),
                 }
             )
 
@@ -3019,6 +3035,8 @@ async def _build_query_context(
 
         if chunk_tracking_log:
             logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
+
+    # Keep original round-robin ordering logic for fair data balance
 
     entities_str = json.dumps(entities_context, ensure_ascii=False)
     relations_str = json.dumps(relations_context, ensure_ascii=False)
@@ -3084,10 +3102,7 @@ async def _build_query_context(
                     "file_path": file_path,
                 })
             
-            # Remove file_path and created_at before merging
-            for entity in expanded_entities_context:
-                entity.pop("file_path", None)
-                entity.pop("created_at", None)
+            # Keep file_path and created_at for expanded entities
             
             # Merge with existing entities context
             entities_context.extend(expanded_entities_context)
@@ -3116,10 +3131,7 @@ async def _build_query_context(
                     "file_path": file_path,
                 })
             
-            # Remove file_path and created_at before merging
-            for relation in expanded_relations_context:
-                relation.pop("file_path", None)
-                relation.pop("created_at", None)
+            # Keep file_path and created_at for expanded relations
             
             # Merge with existing relations context
             relations_context.extend(expanded_relations_context)
@@ -3140,6 +3152,64 @@ async def _build_query_context(
             max_token_size=max_relation_tokens,
             tokenizer=tokenizer,
         )
+
+        # Get source chunks for expanded entities and relations
+        all_source_ids = set()
+        for entity in expanded_entities:
+            source_id = entity.get("source_id", "")
+            if source_id:
+                if GRAPH_FIELD_SEP in source_id:
+                    all_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                else:
+                    all_source_ids.add(source_id)
+        
+        for relation in expanded_relations:
+            source_id = relation.get("source_id", "")
+            if source_id:
+                if GRAPH_FIELD_SEP in source_id:
+                    all_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                else:
+                    all_source_ids.add(source_id)
+
+        # Get chunks for expanded entities/relations if any new source IDs found
+        if all_source_ids:
+            expanded_chunks = []
+            for source_id in all_source_ids:
+                chunk_data = await text_chunks_db.get_by_id(source_id)
+                if chunk_data:
+                    expanded_chunks.append({
+                        "content": chunk_data["content"],
+                        "file_path": chunk_data.get("file_path", "unknown_source"),
+                        "timestamp": chunk_data.get("timestamp", ""),
+                        "source": "expanded"
+                    })
+            
+            # Add expanded chunks to existing chunks (avoiding duplicates)
+            existing_chunk_ids = {chunk.get("chunk_id", "") for chunk in merged_chunks}
+            for chunk in expanded_chunks:
+                chunk_id = chunk.get("chunk_id", "")
+                if chunk_id not in existing_chunk_ids:
+                    merged_chunks.append(chunk)
+            
+            # Rebuild text_units_context with all chunks including expanded ones
+            text_units_context = []
+            for i, chunk in enumerate(merged_chunks):
+                text_units_context.append({
+                    "id": i + 1,
+                    "content": chunk["content"],
+                    "file_path": chunk.get("file_path", "unknown_source"),
+                    "timestamp": chunk.get("timestamp", ""),
+                })
+
+        logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
+
+        # Re-assign IDs after merging expanded data (maintain round-robin order)
+        for i, entity in enumerate(entities_context):
+            entity["id"] = i + 1
+        for i, relation in enumerate(relations_context):
+            relation["id"] = i + 1
+        for i, chunk in enumerate(text_units_context):
+            chunk["id"] = i + 1
 
         # Regenerate final result with updated context
         entities_str = json.dumps(entities_context, ensure_ascii=False)
@@ -3860,6 +3930,7 @@ async def naive_query(
                 "id": i + 1,
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
+                "timestamp": chunk.get("timestamp", ""),
             }
         )
 
