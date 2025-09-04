@@ -1,0 +1,12 @@
+INFO: Starting multi-hop expansion: max_hop=2, max_neighbors=40, threshold=0.3
+INFO: Seed nodes: 59, names: ['Q2 2024', 'Apple', 'September Quarter', 'Tariff-Related Costs', 'Gross Margin', 'Greater China', 'Pull-Ahead Impact', 'Tariff-Related Discussions', 'Services', 'Products Revenue', 'MP Materials', '451 Research', 'Wearables, Home and Accessories', 'iPhone 16 Family', 'June Quarter Revenue', 'Supply Chain Strategy', 'Earnings Conference Call', 'Timothy D. Cook', 'Apple Inc.', 'Revenue Guide', 'Q3 2024', 'Tim Cook', 'Mac', 'AI Investments', 'Tariff-related Pull-ahead', 'Aaron Rakers', 'Mac mini', 'Channel Inventory', 'Michael Ng', 'Europe', 'Capital Expenditures (CapEx)', 'Mac Revenue', 'M4 MacBook Air', 'Atif Malik', 'CapEx', 'Currency Impact', 'Services Revenue', 'Apple Silicon', 'iPhone', 'M&A Activity', 'iPhone Revenue', 'Urban China', 'Vision Pro', 'Kevan Parekh', 'Tim D. Cook', 'iPad', 'MacBook Pro', 'Amit Jawaharlaz Daryanani', 'Evercore ISI', 'Dividend', 'iPad Launches', 'Apple Manufacturing Academy', 'Melius Research LLC', 'Amit Jawaharlal Daryanani', 'BofA Securities', 'Wamsi Mohan', 'Australia', 'David Vogt', 'UBS Investment Bank']
+INFO: Multi-hop: Starting hop 2 with 59 current nodes
+INFO: Multi-hop: Fetching edges for 59 nodes
+INFO: Multi-hop: Retrieved edges dict with 59 entries
+INFO: Multi-hop: Sample score for 'Apple Vision Pro': 0.4259
+INFO: Multi-hop: Sample score for 'AirPods': 0.4309
+INFO: Multi-hop: Sample score for 'iPhone 16e': 0.4538
+INFO: Multi-hop: Total edges processed: 134, candidates found: 30, scored neighbors: 30
+INFO: Multi-hop expansion completed: 28 entities, 30 relations
+INFO: Multi-hop expansion completed: added 28 entities, 30 relations
+INFO:  == LLM cache == saving: hybrid:query:562eff26772e004da6d9dc02fbd2c342

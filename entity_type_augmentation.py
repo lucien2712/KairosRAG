@@ -5,8 +5,7 @@ import json
 from openai import OpenAI
 
 client = OpenAI(
-    api_key="YOUR_API_KEY",
-    base_url="http://aikm-qwen3-235b-fp8-1.mlp-dev.mldp1.dev.tsmc.com/v1/",
+    api_key=os.environ["OPENAI_API_KEY"],
 )
 
 ENTITY_TYPE_PATH = os.path.join(os.environ["WORKING_DIR"], "entity_type.json")

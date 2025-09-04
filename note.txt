@@ -1,0 +1,118 @@
+🎯 核心創新機會
+
+  1. Adaptive Entity Type Discovery
+
+  問題：現在使用固定的實體類型列表 (DEFAULT_ENTITY_TYPES)
+  創新：動態實體類型發現和領域自適應
+  - 從文檔內容自動學習最佳實體類型
+  - 基於查詢模式調整實體粒度
+  - 跨領域的實體類型遷移學習
+
+  2. Context-Aware Mode Selection
+
+  問題：Local/Global/Hybrid 模式需要手動選擇
+  創新：查詢感知的自動模式選擇
+  - 基於查詢複雜度自動選擇檢索模式
+  - 動態調整 Local/Global 權重
+  - 學習式模式切換策略
+
+  3. Hierarchical Chunking Strategy
+
+  問題：固定的 token-based chunking (chunking_by_token_size)
+  創新：語義感知的階層式分塊
+  - 基於語義邊界的智能分塊
+  - 多層次文檔結構保持
+  - 跨塊關係的顯式建模
+
+  4. Uncertainty-Guided Knowledge Refinement
+
+  問題：實體/關係抽取沒有置信度評估
+  創新：不確定性引導的知識圖譜精煉
+  - 實體/關係的置信度量化
+  - 基於不確定性的迭代精煉
+  - 衝突實體的自動解析
+
+  5. Query-Dependent Graph Pruning
+
+  問題：使用完整知識圖譜，可能包含無關信息
+  創新：查詢相關的動態圖剪枝
+  - 基於查詢意圖的圖子集選擇
+  - 實時相關性評分的圖過濾
+  - 查詢特定的圖注意力機制
+
+  6. Contrastive Entity Linking
+
+  問題：實體可能有歧義或重複
+  創新：對比學習的實體鏈接
+  - 相似實體的對比學習
+  - 跨文檔實體去重和合併
+  - 實體別名和變體的自動識別
+
+  7. Reasoning-Enhanced Response Generation
+
+  問題：缺乏多步推理能力
+  創新：基於圖的多步推理
+  - 圖上的邏輯推理路徑發現
+  - 假設-驗證的推理框架
+  - 可解釋的推理鏈生成
+
+  8. Federated Knowledge Integration
+
+  問題：單一知識源的局限性
+  創新：聯邦式多源知識整合
+  - 多個知識圖譜的聯邦學習
+  - 跨域知識的遷移和融合
+  - 隱私保護的協作式 RAG
+
+  📊 具體技術實現
+
+  最有潛力的 3 個方向：
+
+  1. Context-Aware Mode Selection
+
+  class AdaptiveModeSelector:
+      def select_mode(self, query: str, context: dict) -> str:
+          # 基於查詢複雜度、實體密度、關係複雜度自動選擇
+          complexity_score = self.analyze_query_complexity(query)
+          if complexity_score > 0.8:
+              return "hybrid"  # 複雜查詢使用混合模式
+          elif "relationship" in query.lower():
+              return "global"  # 關係查詢使用全局模式
+          else:
+              return "local"   # 簡單查詢使用局部模式
+
+  2. Uncertainty-Guided Knowledge Refinement
+
+  class UncertaintyEstimator:
+      def estimate_entity_confidence(self, entity: dict) -> float:
+          # 基於多個因子評估實體置信度
+          factors = [
+              self.context_consistency_score(entity),
+              self.extraction_confidence(entity),
+              self.cross_reference_score(entity)
+          ]
+          return weighted_average(factors)
+
+  3. Hierarchical Chunking Strategy
+
+  class SemanticChunker:
+      def chunk_by_semantics(self, text: str) -> List[Chunk]:
+          # 基於語義邊界而非固定 token 數進行分塊
+          semantic_boundaries = self.detect_topic_shifts(text)
+          chunks = self.split_by_boundaries(text, semantic_boundaries)
+          return self.add_hierarchical_structure(chunks)
+
+  🏆 論文貢獻潛力
+
+  高影響力創新：
+  1. Context-Aware Mode Selection - 自動化決策，實用性強
+  2. Uncertainty-Guided Refinement - 提升系統可靠性
+  3. Semantic Chunking - 改善基礎文檔處理
+
+  中等影響力：
+  4. Query-Dependent Pruning - 效率優化
+  5. Contrastive Entity Linking - 質量提升
+
+  研究性創新：
+  6. Reasoning-Enhanced Generation - 推理能力
+  7. Federated Integration - 分散式學習
