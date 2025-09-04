@@ -54,7 +54,7 @@ LightRAG uses 4 storage types:
 2. **Entity Extraction**: LLM-based entity and relation extraction from chunks
 3. **Graph Construction**: Building knowledge graph with entities and relations
 4. **Vector Indexing**: Creating embeddings for entities, relations, and chunks
-5. **Query Processing**: Hybrid retrieval combining graph traversal and vector search
+5. **Query Processing**: Hybrid retrieval combining graph traversal, vector search, and multi-hop expansion
 
 ## Key Development Commands
 
@@ -94,6 +94,131 @@ python examples/insert_custom_kg.py
 # Graph visualization
 python examples/graph_visual_with_html.py
 ```
+
+## Multi-hop Retrieval
+
+LightRAG supports multi-hop graph expansion to discover deeper relationships beyond direct keyword matches.
+
+### Multi-hop Query Parameters
+
+```python
+from lightrag import QueryParam
+
+# Basic usage
+response = await rag.aquery(
+    "Apple iPhone revenue and manufacturing relationships",
+    param=QueryParam(
+        mode="hybrid",  # local/global/hybrid/mix
+        max_hop=2,      # Number of hops (0=no expansion, 1=1 hop, 2=2 hops)
+        max_neighbors=10, # Max neighbors per hop
+        multi_hop_relevance_threshold=0.3, # Relevance threshold (0.0-1.0)
+    )
+)
+```
+
+### Multi-hop Parameters Explanation
+
+- **max_hop** (int, default: 1): Number of expansion hops
+  - `0`: Only initial search, no expansion
+  - `1`: Expand to direct neighbors (1-hop)  
+  - `2`: Expand to neighbors of neighbors (2-hop)
+  - Higher values discover deeper relationships but increase complexity
+
+- **max_neighbors** (int, default: 10): Maximum neighbors selected per hop
+  - Controls expansion breadth at each hop
+  - Higher values find more relationships but use more tokens
+
+- **multi_hop_relevance_threshold** (float, default: 0.3): Minimum relevance score
+  - Recommended range: 0.05-0.5
+  - Lower values (0.05-0.1) for broad exploration
+  - Higher values (0.3-0.5) for focused, high-relevance expansion
+
+### 4-Dimensional Scoring System
+
+Multi-hop expansion uses 4-dimensional relevance scoring:
+
+1. **Low-level Similarity (40%)**: Entity-keyword semantic similarity using embeddings
+2. **High-level Similarity (40%)**: Relationship-keyword semantic similarity using embeddings  
+3. **Node Importance (10%)**: Based on node degree/rank in knowledge graph
+4. **Distance Decay (10%)**: Penalty factor that decreases with hop distance (0.8^hop)
+
+### Embedding Format Consistency
+
+Multi-hop expansion maintains consistency with initial search:
+- **Entities**: `"{entity_name} {description}"`
+- **Relationships**: `"{keywords}\t{src_id}\n{tgt_id}\n{description}"`
+
+### Use Cases
+
+Multi-hop retrieval is particularly effective for:
+- **Complex analytical queries**: Cross-quarter trend analysis, impact assessment
+- **Relationship discovery**: Finding indirect connections between entities
+- **Time-sensitive documents**: Earnings calls, financial reports with temporal relationships
+- **Supply chain analysis**: Discovering manufacturing partnerships and dependencies
+
+### Performance Considerations
+
+- Multi-hop expansion increases query latency and token usage
+- Use lower `max_hop` values (1-2) for most applications
+- Adjust `multi_hop_relevance_threshold` based on result quality needs:
+  - 0.05-0.1 for broad exploration (finds more relationships)
+  - 0.3-0.5 for focused analysis (higher quality relationships)
+- Monitor token limits when using high `max_neighbors` values
+- Start with `max_hop=1` and increase only if needed for deeper analysis
+
+## Timestamp Support
+
+LightRAG supports timestamp metadata for time-sensitive document analysis.
+
+### Adding Timestamps During Insertion
+
+```python
+# Insert documents with timestamps
+await rag.ainsert(
+    input=[
+        "Apple Q3 2024 Earnings Call - July 31, 2024. iPhone revenue reached $39.3 billion...",
+        "Apple Q2 2024 Earnings Call - April 30, 2024. iPhone revenue was $45.9 billion..."
+    ],
+    timestamps=[
+        "2024-07-31 Q3 2024",
+        "2024-04-30 Q2 2024"
+    ],
+    file_paths=[
+        "apple_q3_2024_earnings.txt",
+        "apple_q2_2024_earnings.txt"
+    ]
+)
+```
+
+### Timestamp Integration
+
+Timestamps are automatically integrated into entity and relationship descriptions during extraction:
+- Entity descriptions include temporal context: `"Q3 2024: Apple is a technology company..."`
+- Relationship descriptions include time references: `"Q3 2024: Apple's iPhone revenue reached $39.3B..."`
+- Enables time-aware querying and cross-temporal analysis
+
+### Time-Aware Queries
+
+```python
+# Query with temporal context
+response = await rag.aquery(
+    "Compare Apple's iPhone revenue performance across 2024 quarters",
+    param=QueryParam(mode="hybrid", max_hop=2)
+)
+
+# Specific time period queries
+response = await rag.aquery(
+    "What were Apple's key financial highlights in Q3 2024?",
+    param=QueryParam(mode="hybrid")
+)
+```
+
+### Benefits
+
+- **Temporal Analysis**: Compare metrics across time periods
+- **Trend Discovery**: Identify patterns and changes over time
+- **Context Preservation**: Maintain time-sensitive information in knowledge graph
+- **Cross-Quarter Insights**: Multi-hop retrieval can discover temporal relationships
 
 ## Configuration
 

@@ -159,6 +159,15 @@ class QueryParam:
     Default is True to enable reranking when rerank model is available.
     """
 
+    max_hop: int = 1
+    """Maximum number of hops for multi-hop retrieval. Default is 1 to maintain original behavior."""
+
+    max_neighbors: int = 10
+    """Maximum number of neighbors to select per hop during multi-hop expansion."""
+
+    multi_hop_relevance_threshold: float = 0.3
+    """Relevance threshold for multi-hop retrieval. Neighbors with scores below this threshold will be filtered out."""
+
 
 @dataclass
 class StorageNameSpace(ABC):

@@ -2073,6 +2073,232 @@ async def kg_query(
     return response
 
 
+# Multi-hop retrieval functions
+
+async def _calculate_relevance_score(
+    node: dict,
+    edge: dict,
+    current_hop: int,
+    ll_keywords: str,
+    hl_keywords: str,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+) -> float:
+    """Calculate 4-dimensional relevance score for multi-hop retrieval."""
+    
+    # 1. Low-level similarity (0.4 weight) - calculate embedding similarity
+    ll_sim = 0.0
+    if ll_keywords and node and "entity_name" in node:
+        try:
+            # Get embedding function
+            embedding_func = entities_vdb.embedding_func
+            if embedding_func and embedding_func.func:
+                # Calculate embeddings for both query and node
+                query_embedding = await embedding_func.func([ll_keywords])
+                node_content = f"{node['entity_name']} {node.get('description', '')}"
+                node_embedding = await embedding_func.func([node_content])
+                
+                # Calculate cosine similarity
+                import numpy as np
+                query_vec = np.array(query_embedding[0])
+                node_vec = np.array(node_embedding[0])
+                
+                # Normalize vectors
+                query_norm = np.linalg.norm(query_vec)
+                node_norm = np.linalg.norm(node_vec)
+                
+                if query_norm > 0 and node_norm > 0:
+                    ll_sim = np.dot(query_vec, node_vec) / (query_norm * node_norm)
+                    ll_sim = max(0.0, ll_sim)  # Ensure non-negative
+            
+        except Exception as e:
+            logger.warning(f"Error calculating low-level similarity: {e}")
+    
+    # 2. High-level similarity (0.4 weight) - calculate embedding similarity
+    hl_sim = 0.0
+    if hl_keywords and edge and "src_id" in edge and "tgt_id" in edge:
+        try:
+            # Get embedding function for relationships
+            embedding_func = relationships_vdb.embedding_func
+            if embedding_func and embedding_func.func:
+                # Calculate embeddings for query and edge
+                query_embedding = await embedding_func.func([hl_keywords])
+                # Use same format as initial search: "keywords\tsrc\ntgt\ndescription"
+                edge_keywords = edge.get('keywords', '')
+                edge_src = edge.get('src_id', '')
+                edge_tgt = edge.get('tgt_id', '')
+                edge_desc = edge.get('description', '')
+                edge_content = f"{edge_keywords}\t{edge_src}\n{edge_tgt}\n{edge_desc}"
+                edge_embedding = await embedding_func.func([edge_content])
+                
+                # Calculate cosine similarity
+                import numpy as np
+                query_vec = np.array(query_embedding[0])
+                edge_vec = np.array(edge_embedding[0])
+                
+                # Normalize vectors
+                query_norm = np.linalg.norm(query_vec)
+                edge_norm = np.linalg.norm(edge_vec)
+                
+                if query_norm > 0 and edge_norm > 0:
+                    hl_sim = np.dot(query_vec, edge_vec) / (query_norm * edge_norm)
+                    hl_sim = max(0.0, hl_sim)  # Ensure non-negative
+                    
+        except Exception as e:
+            logger.warning(f"Error calculating high-level similarity: {e}")
+    
+    
+    # 3. Distance decay (0.1 weight) - decay factor per hop
+    decay = 0.8 ** current_hop
+    
+    # Combine scores with weights
+    final_score = (
+        0.4 * ll_sim + 
+        0.4 * hl_sim + 
+        0.2 * decay
+    )
+    
+    logger.debug(f"Relevance score for {node.get('entity_name', 'unknown')}: ll_sim={ll_sim:.3f}, hl_sim={hl_sim:.3f}, decay={decay:.3f}, final={final_score:.3f}")
+    
+    return final_score
+
+
+async def _multi_hop_expand(
+    seed_nodes: list[dict],
+    ll_keywords: str,
+    hl_keywords: str,
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+) -> tuple[list[dict], list[dict]]:
+    """Multi-hop expansion using BFS with relevance scoring."""
+    
+    if query_param.max_hop <= 0:
+        return [], []
+    
+    logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, max_neighbors={query_param.max_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
+    logger.info(f"Seed nodes: {len(seed_nodes)}, names: {[n.get('entity_name') for n in seed_nodes]}")
+    
+    all_expanded_entities = []
+    all_expanded_relations = []
+    current_nodes = seed_nodes.copy()
+    visited_nodes = set(node["entity_name"] for node in seed_nodes)
+    
+    # BFS expansion for all hops
+    for hop in range(1, query_param.max_hop + 1):
+        logger.info(f"Multi-hop: Starting hop {hop} with {len(current_nodes)} current nodes")
+        if not current_nodes:
+            logger.info(f"Multi-hop: No current nodes at hop {hop}, stopping expansion")
+            break
+            
+        logger.debug(f"Processing hop {hop} with {len(current_nodes)} nodes")
+        next_nodes = []
+        hop_relations = []
+        
+        # Get neighbors for current nodes
+        node_names = [node["entity_name"] for node in current_nodes]
+        logger.info(f"Multi-hop: Fetching edges for {len(node_names)} nodes")
+        batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
+        logger.info(f"Multi-hop: Retrieved edges dict with {len(batch_edges_dict)} entries")
+        
+        # Collect all neighboring nodes and edges
+        neighbor_candidates = []
+        total_edges = 0
+        
+        for node_name in node_names:
+            edges = batch_edges_dict.get(node_name, [])
+            total_edges += len(edges)
+            logger.debug(f"Node '{node_name}' has {len(edges)} edges")
+            
+            for edge in edges:
+                # Get edge details
+                edge_pairs = [{"src": edge[0], "tgt": edge[1]}]
+                edge_data_dict = await knowledge_graph_inst.get_edges_batch(edge_pairs)
+                edge_data = edge_data_dict.get((edge[0], edge[1]))
+                
+                if edge_data:
+                    edge_info = {
+                        "src_id": edge[0],
+                        "tgt_id": edge[1],
+                        **edge_data
+                    }
+                    
+                    # Find neighbor node (the one that's not in visited)
+                    neighbor_name = edge[1] if edge[0] == node_name else edge[0]
+                    if neighbor_name not in visited_nodes:
+                        neighbor_candidates.append({
+                            "entity_name": neighbor_name,
+                            "edge": edge_info
+                        })
+        
+        # Score and select best neighbors
+        scored_neighbors = []
+        for candidate in neighbor_candidates:
+            try:
+                # Get node details
+                node_dict = await knowledge_graph_inst.get_nodes_batch([candidate["entity_name"]])
+                node_data = node_dict.get(candidate["entity_name"])
+                
+                if node_data:
+                    # Add entity_name to node_data
+                    full_node_data = {
+                        **node_data,
+                        "entity_name": candidate["entity_name"],
+                        "rank": node_data.get("degree", 0)
+                    }
+                    
+                    # Calculate relevance score
+                    score = await _calculate_relevance_score(
+                        full_node_data,
+                        candidate["edge"],
+                        hop,
+                        ll_keywords,
+                        hl_keywords,
+                        entities_vdb,
+                        relationships_vdb
+                    )
+                    
+                    # Log first few scores for debugging
+                    # if len(scored_neighbors) < 3:
+                        # logger.info(f"Multi-hop: Sample score for '{candidate['entity_name']}': {score:.4f}")
+                    
+                    if score >= query_param.multi_hop_relevance_threshold:
+                        scored_neighbors.append((full_node_data, candidate["edge"], score))
+                    else:
+                        logger.debug(f"Node {candidate['entity_name']} rejected: score {score:.3f} < threshold {query_param.multi_hop_relevance_threshold}")
+                        
+            except Exception as e:
+                logger.warning(f"Error scoring neighbor {candidate.get('entity_name', 'unknown')}: {e}")
+        
+        logger.info(f"Multi-hop: Total edges processed: {total_edges}, candidates found: {len(neighbor_candidates)}, scored neighbors: {len(scored_neighbors)}")
+        
+        # Sort by score and select top neighbors
+        scored_neighbors.sort(key=lambda x: x[2], reverse=True)
+        selected = scored_neighbors[:query_param.max_neighbors]
+        
+        if not selected:
+            logger.debug(f"No relevant neighbors found at hop {hop}, stopping expansion")
+            break
+        
+        # Add selected neighbors to results
+        for node_data, edge_data, score in selected:
+            if node_data["entity_name"] not in visited_nodes:
+                next_nodes.append(node_data)
+                all_expanded_entities.append(node_data)
+                visited_nodes.add(node_data["entity_name"])
+                
+            hop_relations.append(edge_data)
+        
+        all_expanded_relations.extend(hop_relations)
+        current_nodes = next_nodes
+        
+        logger.debug(f"Hop {hop} completed: selected {len(selected)} neighbors with scores {[s for _, _, s in selected]}")
+    
+    logger.info(f"Multi-hop expansion completed: {len(all_expanded_entities)} entities, {len(all_expanded_relations)} relations")
+    return all_expanded_entities, all_expanded_relations
+
+
 async def get_keywords_from_query(
     query: str,
     query_param: QueryParam,
@@ -2817,6 +3043,133 @@ async def _build_query_context(
 ```
 
 """
+    
+    # Multi-hop expansion if enabled
+    if query_param.max_hop > 0 and (entities_context or relations_context):
+        logger.info(f"Performing multi-hop expansion with max_hop={query_param.max_hop}")
+        logger.info(f"Initial entities: {len(entities_context)}, relations: {len(relations_context)}")
+        logger.info(f"Seed entities: {[e.get('entity_name') for e in final_entities[:5]]}")
+        
+        # Collect seed nodes for multi-hop expansion
+        seed_nodes = final_entities.copy()
+        
+        # Perform multi-hop expansion
+        expanded_entities, expanded_relations = await _multi_hop_expand(
+            seed_nodes=seed_nodes,
+            ll_keywords=ll_keywords,
+            hl_keywords=hl_keywords,
+            knowledge_graph_inst=knowledge_graph_inst,
+            entities_vdb=entities_vdb,
+            relationships_vdb=relationships_vdb,
+            query_param=query_param,
+        )
+        
+        # Merge expanded results with existing context
+        if expanded_entities:
+            # Create context format for expanded entities
+            expanded_entities_context = []
+            for i, n in enumerate(expanded_entities):
+                created_at = n.get("created_at", "UNKNOWN")
+                if isinstance(created_at, (int, float)):
+                    created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+                
+                file_path = n.get("file_path", "unknown_source")
+                
+                expanded_entities_context.append({
+                    "id": len(entities_context) + i + 1,
+                    "entity": n["entity_name"],
+                    "type": n.get("entity_type", "UNKNOWN"),
+                    "description": n.get("description", "UNKNOWN"),
+                    "created_at": created_at,
+                    "file_path": file_path,
+                })
+            
+            # Remove file_path and created_at before merging
+            for entity in expanded_entities_context:
+                entity.pop("file_path", None)
+                entity.pop("created_at", None)
+            
+            # Merge with existing entities context
+            entities_context.extend(expanded_entities_context)
+        
+        if expanded_relations:
+            # Create context format for expanded relations
+            expanded_relations_context = []
+            for i, e in enumerate(expanded_relations):
+                created_at = e.get("created_at", "UNKNOWN")
+                if isinstance(created_at, (int, float)):
+                    created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(created_at))
+                
+                file_path = e.get("file_path", "unknown_source")
+                
+                if "src_tgt" in e:
+                    entity1, entity2 = e["src_tgt"]
+                else:
+                    entity1, entity2 = e.get("src_id"), e.get("tgt_id")
+                
+                expanded_relations_context.append({
+                    "id": len(relations_context) + i + 1,
+                    "entity1": entity1,
+                    "entity2": entity2,
+                    "description": e.get("description", "UNKNOWN"),
+                    "created_at": created_at,
+                    "file_path": file_path,
+                })
+            
+            # Remove file_path and created_at before merging
+            for relation in expanded_relations_context:
+                relation.pop("file_path", None)
+                relation.pop("created_at", None)
+            
+            # Merge with existing relations context
+            relations_context.extend(expanded_relations_context)
+        
+        logger.info(f"Multi-hop expansion completed: added {len(expanded_entities)} entities, {len(expanded_relations)} relations")
+        
+        # Reapply token limits after expansion
+        entities_context = truncate_list_by_token_size(
+            entities_context,
+            key=lambda x: json.dumps(x, ensure_ascii=False),
+            max_token_size=max_entity_tokens,
+            tokenizer=tokenizer,
+        )
+        
+        relations_context = truncate_list_by_token_size(
+            relations_context,
+            key=lambda x: json.dumps(x, ensure_ascii=False),
+            max_token_size=max_relation_tokens,
+            tokenizer=tokenizer,
+        )
+
+        # Regenerate final result with updated context
+        entities_str = json.dumps(entities_context, ensure_ascii=False)
+        relations_str = json.dumps(relations_context, ensure_ascii=False)
+        text_units_str = json.dumps(text_units_context, ensure_ascii=False)
+
+        result = """-----Entities(KG)-----
+
+```json
+{entities_str}
+```
+
+-----Relationships(KG)-----
+
+```json
+{relations_str}
+```
+
+-----Document Chunks(DC)-----
+
+```json
+{text_units_str}
+```
+
+""".format(
+            entities_str=entities_str,
+            relations_str=relations_str,
+            text_units_str=text_units_str,
+        )
+
     return result
 
 
@@ -3595,3 +3948,5 @@ async def naive_query(
         )
 
     return response
+
+
