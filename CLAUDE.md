@@ -154,9 +154,9 @@ Multi-hop retrieval is particularly effective for:
 - Monitor token limits when using high `max_neighbors` values
 - Start with `max_hop=1` and increase only if needed for deeper analysis
 
-## Timestamp Support
+## Timestamp Support (Enhanced)
 
-LightRAG supports timestamp metadata for time-sensitive document analysis.
+LightRAG provides comprehensive timestamp support with automatic integration into entity/relation descriptions and enhanced context generation.
 
 ### Adding Timestamps During Insertion
 
@@ -178,17 +178,60 @@ await rag.ainsert(
 )
 ```
 
-### Timestamp Integration
+### Automatic Timestamp Integration
 
-Timestamps are automatically integrated into entity and relationship descriptions during extraction:
-- Entity descriptions include temporal context: `"Q3 2024: Apple is a technology company..."`
-- Relationship descriptions include time references: `"Q3 2024: Apple's iPhone revenue reached $39.3B..."`
-- Enables time-aware querying and cross-temporal analysis
+The system automatically handles timestamp integration at multiple levels:
+
+**Entity/Relation Descriptions**: System automatically prefixes user-provided timestamps
+- Entity: `"2024-Q3: Apple is a technology company that reported mixed performance..."`
+- Relation: `"2024-Q3: Tim Cook serves as Apple's CEO and presented earnings results..."`
+
+**Context Generation**: All context data includes comprehensive timestamp information
+```json
+{
+  "entities": [
+    {
+      "id": 1,
+      "entity": "Apple",
+      "type": "organization",
+      "description": "2024-Q3: Apple is a technology company...",
+      "created_at": "2024-09-04 15:30:45",
+      "file_path": "earnings_report.pdf"
+    }
+  ],
+  "relationships": [
+    {
+      "id": 1,
+      "entity1": "Tim Cook",
+      "entity2": "Apple",
+      "description": "2024-Q3: Tim Cook serves as Apple's CEO...",
+      "created_at": "2024-09-04 15:30:45",
+      "file_path": "earnings_report.pdf"
+    }
+  ],
+  "chunks": [
+    {
+      "id": 1,
+      "content": "During Apple's Q3 2024 earnings call...",
+      "file_path": "earnings_report.pdf",
+      "The content is occured at": "2024-Q3"
+    }
+  ]
+}
+```
+
+### Enhanced Multi-hop with Timestamp Support
+
+Multi-hop expansion now preserves complete metadata:
+- **Expanded entities/relations**: Include `file_path`, `created_at`, and timestamp prefixes
+- **Source chunk retrieval**: Automatically includes chunks from expanded entities/relations
+- **Round-robin merging**: Balances initial query results with expanded results using round-robin algorithm
+- **Complete traceability**: All data maintains source attribution and temporal context
 
 ### Time-Aware Queries
 
 ```python
-# Query with temporal context
+# Query with temporal context and multi-hop expansion
 response = await rag.aquery(
     "Compare Apple's iPhone revenue performance across 2024 quarters",
     param=QueryParam(mode="hybrid", max_hop=2)
@@ -203,10 +246,103 @@ response = await rag.aquery(
 
 ### Benefits
 
-- **Temporal Analysis**: Compare metrics across time periods
-- **Trend Discovery**: Identify patterns and changes over time
-- **Context Preservation**: Maintain time-sensitive information in knowledge graph
-- **Cross-Quarter Insights**: Multi-hop retrieval can discover temporal relationships
+- **Automatic Processing**: No dependency on LLM remembering to add timestamps
+- **Consistent Format**: All timestamp prefixes follow consistent format
+- **Complete Attribution**: All context data includes source and temporal information
+- **Enhanced Multi-hop**: Expanded results maintain full metadata and source chunks
+- **Temporal Analysis**: Compare metrics across time periods with full context
+
+## Entity Management Tools
+
+### Entity Merging (`entity_merge.py`)
+
+Intelligent entity deduplication using LLM-based decision making with Neo4j integration:
+
+**Features**:
+- **LLM-Powered Decision**: Uses LLM with tool access to determine entity similarity (>95% confidence threshold)
+- **Automatic Merging**: Calls `merge()` tool to execute actual entity consolidation in Neo4j
+- **Flexible Strategy**: Configurable merge strategies for different entity attributes
+- **Source Preservation**: Maintains traceability through source attribution
+
+**Merge Strategy Configuration**:
+```python
+merge_strategy = {
+    "created_at": "keep_last",      # Keep most recent timestamp
+    "description": "concatenate",   # Combine descriptions
+    "entity_type": "keep_first",    # Preserve original type
+    "source_id": "join_unique",     # Merge unique source IDs
+    "file_path": "join_unique",     # Merge unique file paths
+}
+```
+
+**Usage**:
+```bash
+# Set environment variables
+export NEO4J_URI="bolt://localhost:7687"
+export NEO4J_USER="neo4j"
+export NEO4J_PASS="password"
+export LLM_BASE_URL="http://localhost:8000/v1/"
+export LLM_API_KEY="your_api_key"
+export LLM_MODEL="qwen3-235b-fp8"
+
+# Run entity merging
+python entity_merge.py
+```
+
+### Entity Type Augmentation (`entity_type_augmentation.py`)
+
+Adaptive entity type discovery system that analyzes document content to suggest and refine entity types:
+
+**Features**:
+- **Document Analysis**: Processes PDF documents to identify new entity type patterns
+- **LLM-Based Suggestion**: Uses advanced prompting to suggest meaningful entity types
+- **Duplicate Removal**: Automatically refines and deduplicates similar entity types
+- **Incremental Processing**: Tracks processed files to avoid reprocessing
+- **Quality Control**: Avoids generic types like "other" or "unknown"
+
+**Default Entity Types**:
+```json
+[
+  {
+    "entity_type": "organization",
+    "explanation": "An entity representing organizations, companies, or institutions."
+  },
+  {
+    "entity_type": "person", 
+    "explanation": "An entity representing individual persons."
+  },
+  {
+    "entity_type": "geo",
+    "explanation": "An entity representing geographical locations."
+  },
+  {
+    "entity_type": "temporal_range",
+    "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July')."
+  }
+]
+```
+
+**Workflow**:
+1. **Document Processing**: Extract text content from PDF files using `textract`
+2. **Type Suggestion**: LLM analyzes content against existing types to suggest new ones
+3. **Type Refinement**: LLM removes duplicates and semantically overlapping types
+4. **Incremental Updates**: Maintains processing status to handle large document sets efficiently
+
+**Usage**:
+```bash
+# Set up document folder and run
+export WORKING_DIR="./data"
+export OPENAI_API_KEY="your_openai_key"
+
+# Place PDF files in ./transcript/ folder
+python entity_type_augmentation.py
+```
+
+**Integration Benefits**:
+- **Adaptive Schema**: Entity types evolve based on actual document content
+- **Domain Specificity**: Discovers domain-specific entity types (e.g., financial_metric, product_category)
+- **Reduced Miscategorization**: Better entity typing reduces "category" fallback usage
+- **Improved Retrieval**: More precise entity types enhance query relevance
 
 ## Configuration
 
