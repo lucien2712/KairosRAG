@@ -57,7 +57,7 @@ async def main():
 
         if texts:
             rag.insert(texts, file_paths=file_paths, timestamps=fiscal_years)
-            #rag.agentic_merging(threshold=0.8)
+            rag.agentic_merging(threshold=0.8)
             print("Graph building success!")
         else:
             print("No valid PDF content found, graph not built.")

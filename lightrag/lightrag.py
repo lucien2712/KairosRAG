@@ -2912,6 +2912,19 @@ class LightRAG:
             )
         )
 
+    def agentic_merging(self, threshold: float = 0.8) -> dict:
+        """
+        Perform intelligent entity merging using vector similarity and LLM decision making.
+        
+        Args:
+            threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
+            
+        Returns:
+            dict: Statistics about the merging process
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(self.aagentic_merging(threshold))
+
     async def aexport_data(
         self,
         output_path: str,
@@ -2968,3 +2981,325 @@ class LightRAG:
         loop.run_until_complete(
             self.aexport_data(output_path, file_format, include_vector_data)
         )
+
+    async def aagentic_merging(self, threshold: float = 0.8) -> dict:
+        """
+        Asynchronously perform intelligent entity merging using vector similarity and LLM decision making.
+        
+        Args:
+            threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
+            
+        Returns:
+            dict: Statistics about the merging process
+        """
+        import numpy as np
+        import json
+        import time as time_module
+        from langchain_openai import ChatOpenAI
+        from langchain_core.tools import tool
+        from .prompt import PROMPTS
+        from .utils import cosine_similarity
+        
+        start_time = time_module.time()
+        print(f"🚀 Starting agentic entity merging with threshold={threshold}")
+        
+        # Initialize LLM (you may need to adjust this based on your setup)
+        llm = ChatOpenAI(
+            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            api_key=os.getenv("OPENAI_API_KEY"),
+        )
+        print(f"✅ LLM initialized: {os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
+        
+        # Define the merge tool for LLM
+        @tool
+        def merge_entities_tool(a_entity_id: str, b_entity_id: str) -> str:
+            """
+            If two entities represent the same real-world entity, merge b_entity_id into a_entity_id.
+            """
+            try:
+                self.merge_entities(
+                    source_entities=[a_entity_id, b_entity_id],
+                    target_entity=a_entity_id,
+                    merge_strategy={
+                        "created_at": "keep_last",
+                        "description": "concatenate",
+                        "entity_type": "keep_first",
+                        "source_id": "join_unique",
+                        "file_path": "join_unique",
+                    },
+                )
+                return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
+            except Exception as e:
+                return f"Merge failed: {str(e)}"
+        
+        # Bind tools to LLM
+        llm_with_tools = llm.bind_tools([merge_entities_tool])
+        
+        # Step 1: Get all entities from graph storage and their vectors from entities_vdb
+        print("📊 Loading entities from graph storage...")
+        all_nodes = await self.chunk_entity_relation_graph.get_all_nodes()
+        print(f"✅ Found {len(all_nodes)} nodes in graph storage")
+        
+        if not all_nodes:
+            print("❌ No entities found in graph storage")
+            return {
+                "total_entities": 0,
+                "candidate_pairs": 0,
+                "llm_evaluated_pairs": 0,
+                "merged_pairs": 0,
+                "remaining_entities": 0,
+                "processing_time": time_module.time() - start_time,
+                "similarity_threshold": threshold
+            }
+        
+        # Generate vector database IDs for all entities and batch get vector data
+        from .utils import compute_mdhash_id
+        entity_vdb_ids = []
+        entity_id_to_node = {}  # Map entity_id to node data
+        
+        for node in all_nodes:
+            entity_id = node.get('entity_id')
+            if entity_id:
+                vdb_id = compute_mdhash_id(entity_id, prefix="ent-")
+                entity_vdb_ids.append(vdb_id)
+                entity_id_to_node[entity_id] = node
+        
+        # Access vector data directly from the storage client to get the vector field
+        print(f"🔍 Batch loading vectors for {len(entity_vdb_ids)} entities...")
+        entities_vdb_data = {}
+        if entity_vdb_ids:
+            # Access the internal client to get raw data including vectors
+            client = await self.entities_vdb._get_client()
+            vdb_results = client.get(entity_vdb_ids)
+            print(f"✅ Retrieved {len(vdb_results)} vector results")
+            
+            # Process results - create mapping from entity_id to vector data
+            for vdb_data in vdb_results:
+                if vdb_data and 'content' in vdb_data:
+                    # Extract entity_id from content (format: "entity_name\ndescription")
+                    content = vdb_data['content']
+                    entity_name = content.split('\n')[0] if '\n' in content else content
+                    entities_vdb_data[entity_name] = vdb_data
+        
+        print(f"✅ Successfully loaded vectors for {len(entities_vdb_data)} entities")
+        
+        if not entities_vdb_data:
+            print("❌ No vector data found for entities")
+            return {
+                "total_entities": 0,
+                "candidate_pairs": 0,
+                "llm_evaluated_pairs": 0,
+                "merged_pairs": 0,
+                "remaining_entities": 0,
+                "processing_time": time_module.time() - start_time,
+                "similarity_threshold": threshold
+            }
+        
+        # Step 2: Extract entity information and embeddings
+        print(f"🔍 Extracting entity information and embeddings...")
+        entities = []
+        entity_embeddings = []
+        
+        # Debug: Check what we have in entities_vdb_data
+        print(f"🔍 Sample entity data keys: {list(entities_vdb_data.keys())[:5] if entities_vdb_data else 'None'}")
+        if entities_vdb_data:
+            sample_entity = next(iter(entities_vdb_data.values()))
+            print(f"🔍 Sample entity data structure: {list(sample_entity.keys()) if sample_entity else 'None'}")
+        
+        for entity_name, entity_data in entities_vdb_data.items():
+            # print(f"🔍 Processing entity: {entity_name}")
+            # print(f"    - Has content: {'content' in entity_data}")
+            # print(f"    - Has vector: {'vector' in entity_data}")
+            
+            if 'content' in entity_data and 'vector' in entity_data:
+                # Get description from graph node data
+                node_data = entity_id_to_node.get(entity_name, {})
+                description = node_data.get('description', '')
+                
+                print(f"    - Found in graph: {entity_name in entity_id_to_node}")
+                print(f"    - Description length: {len(description)}")
+                
+                # Decode the base64 vector (matching nano_vector_db_impl storage format)
+                import base64
+                import numpy as np
+                import zlib
+                try:
+                    # Decode base64
+                    compressed_vector = base64.b64decode(entity_data['vector'])
+                    # Decompress with zlib
+                    vector_bytes = zlib.decompress(compressed_vector)
+                    # Convert to numpy array (stored as float16, convert to float32)
+                    vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+                    
+                    # Only add if we have a reasonable vector size
+                    if len(vector_array) > 0:
+                        entities.append({
+                            'entity_id': entity_name,
+                            'description': description,
+                        })
+                        entity_embeddings.append(vector_array.tolist())
+                        print(f"    - ✅ Added to entities list (vector dim: {len(vector_array)})")
+                    else:
+                        print(f"    - ❌ Empty vector after processing")
+                except Exception as e:
+                    print(f"    - ❌ Error decoding vector: {e}")
+            else:
+                print(f"    - ❌ Missing required fields")
+        
+        print(f"✅ Successfully extracted {len(entities)} entities with embeddings")
+        
+        total_entities = len(entities)
+        if total_entities < 2:
+            return {
+                "total_entities": total_entities,
+                "candidate_pairs": 0,
+                "llm_evaluated_pairs": 0,
+                "merged_pairs": 0,
+                "remaining_entities": total_entities,
+                "processing_time": time_module.time() - start_time,
+                "similarity_threshold": threshold
+            }
+        
+        # Step 3: Calculate similarity matrix using numpy (efficient!)
+        print(f"🧮 Calculating similarity matrix for {len(entities)} entities...")
+        
+        if not entity_embeddings:
+            print("❌ No valid embeddings found")
+            return {
+                "total_entities": len(all_nodes),
+                "candidate_pairs": 0,
+                "llm_evaluated_pairs": 0,
+                "merged_pairs": 0,
+                "remaining_entities": len(all_nodes),
+                "processing_time": time_module.time() - start_time,
+                "similarity_threshold": threshold
+            }
+        
+        # Check and standardize vector dimensions
+        vector_dimensions = [len(emb) for emb in entity_embeddings]
+        max_dim = max(vector_dimensions)
+        min_dim = min(vector_dimensions)
+        
+        # print(f"🔍 Vector dimensions - Min: {min_dim}, Max: {max_dim}")
+        
+        # Pad shorter vectors with zeros to match the longest
+        standardized_embeddings = []
+        for emb in entity_embeddings:
+            if len(emb) < max_dim:
+                padded_emb = emb + [0.0] * (max_dim - len(emb))
+                standardized_embeddings.append(padded_emb)
+            else:
+                standardized_embeddings.append(emb[:max_dim])  # Truncate if longer
+        
+        try:
+            embeddings = np.array(standardized_embeddings, dtype=np.float32)
+            # print(f"✅ Created embeddings array: {embeddings.shape}")
+            
+            # Normalize vectors for cosine similarity
+            norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+            # Avoid division by zero
+            norms = np.where(norms == 0, 1, norms)
+            embeddings = embeddings / norms
+            
+            # Calculate similarity matrix
+            similarity_matrix = np.dot(embeddings, embeddings.T)
+            # print(f"✅ Similarity matrix calculated: {similarity_matrix.shape}")
+        except Exception as e:
+            print(f"❌ Error creating similarity matrix: {e}")
+            return {
+                "total_entities": len(all_nodes),
+                "candidate_pairs": 0,
+                "llm_evaluated_pairs": 0,
+                "merged_pairs": 0,
+                "remaining_entities": len(all_nodes),
+                "processing_time": time_module.time() - start_time,
+                "similarity_threshold": threshold,
+                "error": str(e)
+            }
+        
+        # Step 4: Find candidate pairs above threshold
+        print(f"🔍 Filtering candidate pairs with similarity >= {threshold}...")
+        candidate_pairs = []
+        for i in range(len(entities)):
+            for j in range(i + 1, len(entities)):
+                similarity = similarity_matrix[i, j]
+                if similarity >= threshold:
+                    candidate_pairs.append((i, j, float(similarity)))
+        
+        print(f"✅ Found {len(candidate_pairs)} candidate pairs for LLM evaluation")
+        
+        # Step 5: LLM decision making for candidate pairs
+        print(f"🤖 Starting LLM evaluation of candidate pairs...")
+        merged_pairs = 0
+        llm_evaluated_pairs = 0
+        active_entities = set(range(len(entities)))  # Track which entities are still active
+        
+        for i, j, similarity in candidate_pairs:
+            # Skip if either entity has already been merged
+            if i not in active_entities or j not in active_entities:
+                continue
+                
+            entity_a = entities[i]
+            entity_b = entities[j]
+            
+            # Prepare LLM prompt
+            user_prompt = (
+                "Determine whether the two entities are the same. "
+                "Only when you are over 95% confident that A and B refer to the SAME entity, "
+                "invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)`. "
+                "If you are not 95% confident, reply exactly with `NO_MERGE`.\n\n"
+                f"A.entity_id = {entity_a['entity_id']}\n"
+                f"A.description = {entity_a['description']}\n\n"
+                f"B.entity_id = {entity_b['entity_id']}\n"
+                f"B.description = {entity_b['description']}\n"
+            )
+            
+            try:
+                # Call LLM with tools
+                response = await llm_with_tools.ainvoke([
+                    {"role": "system", "content": PROMPTS["entity_merge_system"]},
+                    {"role": "user", "content": PROMPTS["entity_merge_examples"]},
+                    {"role": "user", "content": user_prompt},
+                ])
+                
+                llm_evaluated_pairs += 1
+                
+                # Check if LLM called the merge tool
+                tool_calls = response.additional_kwargs.get("tool_calls", [])
+                if tool_calls:
+                    # LLM decided to merge - mark entity B as inactive
+                    active_entities.discard(j)
+                    merged_pairs += 1
+                    print(f"Merged: {entity_a['entity_id']} <- {entity_b['entity_id']} (similarity: {similarity:.3f})")
+                
+            except Exception as e:
+                print(f"Error processing pair ({entity_a['entity_id']}, {entity_b['entity_id']}): {str(e)}")
+                continue
+        
+        processing_time = time_module.time() - start_time
+        remaining_entities = len(active_entities)
+        
+        # Print final statistics
+        print("\n" + "="*50)
+        print("🎉 Agentic Entity Merging Complete!")
+        print("="*50)
+        print(f"📊 Total entities: {total_entities}")
+        print(f"🔍 Candidate pairs (similarity >= {threshold}): {len(candidate_pairs)}")
+        print(f"🤖 LLM evaluated pairs: {llm_evaluated_pairs}")
+        print(f"✅ Successfully merged pairs: {merged_pairs}")
+        print(f"📊 Remaining entities after merging: {remaining_entities}")
+        print(f"⏱️ Processing time: {processing_time:.2f}s")
+        if len(candidate_pairs) > 0:
+            efficiency = (len(candidate_pairs) - llm_evaluated_pairs) / len(candidate_pairs) * 100
+            print(f"⚡ Efficiency gain: {efficiency:.1f}% (avoided {len(candidate_pairs) - llm_evaluated_pairs} unnecessary LLM calls)")
+        print("="*50)
+        
+        return {
+            "total_entities": total_entities,
+            "candidate_pairs": len(candidate_pairs),
+            "llm_evaluated_pairs": llm_evaluated_pairs,
+            "merged_pairs": merged_pairs,
+            "remaining_entities": remaining_entities,
+            "processing_time": processing_time,
+            "similarity_threshold": threshold
+        }

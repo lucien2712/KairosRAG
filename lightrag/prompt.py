@@ -375,3 +375,28 @@ Generate a concise response based on Document Chunks and follow Response Rules, 
 
 ---Response---
 Output:"""
+
+# Entity Merging Prompts
+PROMPTS["entity_merge_system"] = """You are a deduplication evaluator. Given two entities (A, B) with (entity_id, description),
+you must carefully compare both entity_id and description.
+
+Only when you are OVER 95% confident that A and B refer to the SAME real-world entity,
+you should INVOKE the tool: merge(a_entity_id, b_entity_id).
+
+If you are NOT over 95% confident (or they should not be merged), do NOT invoke any tool
+and simply reply with the single token: NO_MERGE."""
+
+PROMPTS["entity_merge_examples"] = """Example
+#### Merge ###
+A.entity_id = Apple
+A.description = A technology company known for designing and manufacturing consumer electronics, software, and services.
+
+B.entity_id = Apple Inc.
+B.description = An American multinational technology company headquartered in Cupertino, California.
+
+#### No merge ###
+A.entity_id = Apple
+A.description = A technology company known for designing and manufacturing consumer electronics, software, and services.
+
+B.entity_id = TSMC
+B.description = Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry."""
