@@ -289,6 +289,56 @@ export LLM_MODEL="qwen3-235b-fp8"
 python entity_merge.py
 ```
 
+### Agentic Entity Merging (`rag.agentic_merging()`)
+
+High-performance entity merging using vector similarity pre-filtering and LLM decision making:
+
+**Features**:
+- **Vector Similarity Pre-filtering**: Uses cosine similarity to identify candidate pairs efficiently
+- **LLM Decision Making**: Employs LLM with tool access for final merge decisions (>95% confidence)
+- **Automatic Execution**: Directly calls merge operations without external dependencies
+- **Batch Processing**: Processes all entities in memory for optimal performance
+- **Comprehensive Statistics**: Provides detailed metrics on merging efficiency
+
+**Requirements**:
+- **Backend Support**: Currently implemented and tested with NanoVectorDB only (other vector storage backends require additional implementation for vector data access)
+- **Vector Data Access**: Requires direct access to stored vector embeddings with proper decoding
+
+**Performance Benefits**:
+- **Efficiency**: Pre-filtering reduces LLM calls by filtering low-similarity pairs
+- **Speed**: Numpy-based matrix operations for fast similarity computation
+- **Scalability**: Handles large entity sets through vectorized operations
+
+**Usage**:
+```python
+# Run agentic merging with custom threshold
+result = await rag.aagentic_merging(threshold=0.8)  # async
+# or
+result = rag.agentic_merging(threshold=0.8)  # sync
+
+# Example results
+{
+    "total_entities": 89,
+    "candidate_pairs": 28,
+    "llm_evaluated_pairs": 24,
+    "merged_pairs": 4,
+    "remaining_entities": 85,
+    "processing_time": 18.87,
+    "similarity_threshold": 0.8
+}
+```
+
+**Example Merge Results**:
+- Timothy D. Cook ← Tim Cook (similarity: 0.903)
+- Apple Inc. ← Apple (similarity: 0.880)
+- iPhone 16 Family ← iPhone 16 (similarity: 0.863)
+- iPhone 16e ← 16e Model (similarity: 0.875)
+
+**Threshold Guidelines**:
+- `0.8`: Conservative merging, high precision
+- `0.7`: Moderate merging, balanced approach
+- `0.6`: Aggressive merging, higher recall
+
 ### Entity Type Augmentation (`entity_type_augmentation.py`)
 
 Adaptive entity type discovery system that analyzes document content to suggest and refine entity types:

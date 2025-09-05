@@ -19,6 +19,11 @@ Enhanced version of [LightRAG](https://github.com/HKUDS/LightRAG) with automatic
 
 **Innovation**: `entity_type_augmentation.py` automatically discovers and suggests domain-specific entity types based on document content.
 
+### ⚡ **Agentic Entity Merging**
+**Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
+
+**Innovation**: `rag.agentic_merging()` combines vector similarity pre-filtering with LLM decision making for intelligent entity deduplication. *Note: Currently implemented for NanoVectorDB backend only.*
+
 ## 🛠️ Installation
 
 ```bash
@@ -55,6 +60,10 @@ async def main():
         "Apple iPhone revenue trends and supplier relationships",
         param=QueryParam(mode="hybrid", max_hop=2)
     )
+    
+    # Run agentic entity merging (requires NanoVectorDB)
+    result = await rag.aagentic_merging(threshold=0.8)
+    # Example: Merged "Timothy D. Cook" ← "Tim Cook" (similarity: 0.903)
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -115,7 +124,10 @@ python entity_type_augmentation.py
 # 2. Insert documents with timestamps
 await rag.insert(documents, timestamps=["2024-Q3"], file_path)
 
-# 3. Query with enhanced retrieval
+# 3. Run agentic entity merging (requires NanoVectorDB)
+result = await rag.aagentic_merging(threshold=0.8)
+
+# 4. Query with enhanced retrieval
 response = rag.query(query, param=QueryParam(max_hop=2))
 ```
 
@@ -125,6 +137,7 @@ This project enhances LightRAG with:
 1. **Automatic Timestamp Integration**: Eliminates LLM dependency
 2. **Enhanced Multi-hop Retrieval**: Complete metadata preservation  
 3. **Adaptive Entity Type Discovery**: Content-driven schema evolution
+4. **Agentic Entity Merging**: Vector similarity + LLM intelligent deduplication (implemented for NanoVectorDB)
 
 ## 🙏 Acknowledgments
 
