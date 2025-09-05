@@ -1,4 +1,4 @@
-# LightRAG Enhanced
+# KairosRAG
 
 Enhanced version of [LightRAG](https://github.com/HKUDS/LightRAG) with automatic timestamp integration, improved multi-hop retrieval, and adaptive entity type discovery.
 
@@ -27,8 +27,8 @@ Enhanced version of [LightRAG](https://github.com/HKUDS/LightRAG) with automatic
 ## 🛠️ Installation
 
 ```bash
-git clone https://github.com/your-username/LightRAG-Enhanced.git
-cd LightRAG-Enhanced
+git clone https://github.com/your-username/KairosRAG.git
+cd KairosRAG
 pip install -e .
 ```
 

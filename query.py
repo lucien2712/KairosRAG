@@ -32,7 +32,7 @@ async def main():
                 history_turns=0,
                 chunk_top_k= 20,
                 max_total_tokens=120000,
-                max_hop=2,
+                max_hop=3,
                 max_neighbors= 30,
                 enable_rerank=False,
                 user_prompt="""

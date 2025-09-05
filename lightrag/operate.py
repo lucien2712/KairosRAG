@@ -2480,7 +2480,7 @@ async def _multi_hop_expand(
             except Exception as e:
                 logger.warning(f"Error scoring neighbor {candidate.get('entity_name', 'unknown')}: {e}")
         
-        logger.info(f"Multi-hop: Total edges processed: {total_edges}, candidates found: {len(neighbor_candidates)}, scored neighbors: {len(scored_neighbors)}")
+        logger.info(f"Multi-hop: Hop {hop} found {len(scored_neighbors)} qualified nodes")
         
         # Sort by score and select top neighbors
         scored_neighbors.sort(key=lambda x: x[2], reverse=True)
@@ -2502,7 +2502,6 @@ async def _multi_hop_expand(
         all_expanded_relations.extend(hop_relations)
         current_nodes = next_nodes
         
-        logger.debug(f"Hop {hop} completed: selected {len(selected)} neighbors with scores {[s for _, _, s in selected]}")
     
     logger.info(f"Multi-hop expansion completed: {len(all_expanded_entities)} entities, {len(all_expanded_relations)} relations")
     return all_expanded_entities, all_expanded_relations
