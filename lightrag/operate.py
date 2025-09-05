@@ -2094,6 +2094,102 @@ async def kg_query(
 
 # Multi-hop retrieval functions
 
+async def _get_entity_vectors_batch(
+    entity_names: list[str], 
+    entities_vdb: BaseVectorStorage
+) -> dict[str, list[float]]:
+    """Get entity vectors in batch for multi-hop relevance calculation."""
+    try:
+        # Generate vector database IDs for all entities
+        from .utils import compute_mdhash_id
+        entity_vdb_ids = [compute_mdhash_id(name, prefix="ent-") for name in entity_names]
+        
+        # Check if entities_vdb supports direct vector access (NanoVectorDB)
+        if hasattr(entities_vdb, '_get_client'):
+            # Direct access for NanoVectorDB
+            client = await entities_vdb._get_client()
+            vdb_results = client.get(entity_vdb_ids)
+            
+            entity_vectors = {}
+            for i, vdb_data in enumerate(vdb_results):
+                if vdb_data and 'vector' in vdb_data:
+                    entity_name = entity_names[i]
+                    try:
+                        # Decode NanoVectorDB format: base64 + zlib + float16
+                        import base64
+                        import numpy as np
+                        import zlib
+                        
+                        compressed_vector = base64.b64decode(vdb_data['vector'])
+                        vector_bytes = zlib.decompress(compressed_vector)
+                        vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+                        entity_vectors[entity_name] = vector_array.tolist()
+                    except Exception as e:
+                        logger.debug(f"Error decoding vector for {entity_name}: {e}")
+                        
+            return entity_vectors
+        else:
+            # Fallback: use regular get_by_ids (without vectors) - will still compute embeddings
+            logger.debug("Vector storage doesn't support direct vector access, will compute embeddings")
+            return {}
+            
+    except Exception as e:
+        logger.debug(f"Error getting entity vectors batch: {e}")
+        return {}
+
+async def _get_relationship_vectors_batch(
+    relationships: list[dict], 
+    relationships_vdb: BaseVectorStorage
+) -> dict[str, list[float]]:
+    """Get relationship vectors in batch for multi-hop relevance calculation."""
+    try:
+        # Generate vector database IDs for all relationships
+        from .utils import compute_mdhash_id
+        rel_vdb_ids = []
+        rel_keys = []
+        
+        for rel in relationships:
+            src_id = rel.get('src_id', '')
+            tgt_id = rel.get('tgt_id', '')
+            if src_id and tgt_id:
+                # Use same format as relationship storage
+                rel_key = f"{src_id}-{tgt_id}"
+                rel_keys.append(rel_key)
+                rel_vdb_ids.append(compute_mdhash_id(rel_key, prefix="rel-"))
+        
+        # Check if relationships_vdb supports direct vector access (NanoVectorDB)
+        if hasattr(relationships_vdb, '_get_client'):
+            # Direct access for NanoVectorDB
+            client = await relationships_vdb._get_client()
+            vdb_results = client.get(rel_vdb_ids)
+            
+            relationship_vectors = {}
+            for i, vdb_data in enumerate(vdb_results):
+                if vdb_data and 'vector' in vdb_data:
+                    rel_key = rel_keys[i]
+                    try:
+                        # Decode NanoVectorDB format: base64 + zlib + float16
+                        import base64
+                        import numpy as np
+                        import zlib
+                        
+                        compressed_vector = base64.b64decode(vdb_data['vector'])
+                        vector_bytes = zlib.decompress(compressed_vector)
+                        vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+                        relationship_vectors[rel_key] = vector_array.tolist()
+                    except Exception as e:
+                        logger.debug(f"Error decoding vector for {rel_key}: {e}")
+                        
+            return relationship_vectors
+        else:
+            # Fallback: use regular get_by_ids (without vectors) - will still compute embeddings
+            logger.debug("Vector storage doesn't support direct vector access, will compute embeddings")
+            return {}
+            
+    except Exception as e:
+        logger.debug(f"Error getting relationship vectors batch: {e}")
+        return {}
+
 async def _calculate_relevance_score(
     node: dict,
     edge: dict,
@@ -2102,6 +2198,10 @@ async def _calculate_relevance_score(
     hl_keywords: str,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    entity_vectors_cache: dict[str, list[float]] = None,
+    relationship_vectors_cache: dict[str, list[float]] = None,
+    query_ll_embedding: list[float] = None,
+    query_hl_embedding: list[float] = None,
 ) -> float:
     """Calculate 4-dimensional relevance score for multi-hop retrieval."""
     
@@ -2109,18 +2209,37 @@ async def _calculate_relevance_score(
     ll_sim = 0.0
     if ll_keywords and node and "entity_name" in node:
         try:
-            # Get embedding function
-            embedding_func = entities_vdb.embedding_func
-            if embedding_func and embedding_func.func:
-                # Calculate embeddings for both query and node
-                query_embedding = await embedding_func.func([ll_keywords])
-                node_content = f"{node['entity_name']} {node.get('description', '')}"
-                node_embedding = await embedding_func.func([node_content])
-                
-                # Calculate cosine similarity
+            entity_name = node["entity_name"]
+            
+            # Try to get query embedding from cache first
+            import numpy as np
+            if query_ll_embedding is not None:
+                query_vec = np.array(query_ll_embedding)
+            else:
+                # Fallback: compute query embedding
+                embedding_func = entities_vdb.embedding_func
+                if embedding_func and embedding_func.func:
+                    query_embedding = await embedding_func.func([ll_keywords])
+                    query_vec = np.array(query_embedding[0])
+                else:
+                    query_vec = None
+            
+            # Try to get entity embedding from cache first
+            if entity_vectors_cache and entity_name in entity_vectors_cache:
+                node_vec = np.array(entity_vectors_cache[entity_name])
+            else:
+                # Fallback: compute entity embedding
+                embedding_func = entities_vdb.embedding_func
+                if embedding_func and embedding_func.func:
+                    node_content = f"{entity_name} {node.get('description', '')}"
+                    node_embedding = await embedding_func.func([node_content])
+                    node_vec = np.array(node_embedding[0])
+                else:
+                    node_vec = None
+            
+            # Calculate cosine similarity if both vectors are available
+            if query_vec is not None and node_vec is not None:
                 import numpy as np
-                query_vec = np.array(query_embedding[0])
-                node_vec = np.array(node_embedding[0])
                 
                 # Normalize vectors
                 query_norm = np.linalg.norm(query_vec)
@@ -2137,23 +2256,42 @@ async def _calculate_relevance_score(
     hl_sim = 0.0
     if hl_keywords and edge and "src_id" in edge and "tgt_id" in edge:
         try:
-            # Get embedding function for relationships
-            embedding_func = relationships_vdb.embedding_func
-            if embedding_func and embedding_func.func:
-                # Calculate embeddings for query and edge
-                query_embedding = await embedding_func.func([hl_keywords])
-                # Use same format as initial search: "keywords\tsrc\ntgt\ndescription"
-                edge_keywords = edge.get('keywords', '')
-                edge_src = edge.get('src_id', '')
-                edge_tgt = edge.get('tgt_id', '')
-                edge_desc = edge.get('description', '')
-                edge_content = f"{edge_keywords}\t{edge_src}\n{edge_tgt}\n{edge_desc}"
-                edge_embedding = await embedding_func.func([edge_content])
-                
-                # Calculate cosine similarity
+            edge_src = edge.get('src_id', '')
+            edge_tgt = edge.get('tgt_id', '')
+            edge_key = f"{edge_src}-{edge_tgt}"
+            
+            # Try to get query embedding from cache first
+            import numpy as np
+            if query_hl_embedding is not None:
+                query_vec = np.array(query_hl_embedding)
+            else:
+                # Fallback: compute query embedding
+                embedding_func = relationships_vdb.embedding_func
+                if embedding_func and embedding_func.func:
+                    query_embedding = await embedding_func.func([hl_keywords])
+                    query_vec = np.array(query_embedding[0])
+                else:
+                    query_vec = None
+            
+            # Try to get relationship embedding from cache first
+            if relationship_vectors_cache and edge_key in relationship_vectors_cache:
+                edge_vec = np.array(relationship_vectors_cache[edge_key])
+            else:
+                # Fallback: compute relationship embedding
+                embedding_func = relationships_vdb.embedding_func
+                if embedding_func and embedding_func.func:
+                    # Use same format as initial search: "keywords\tsrc\ntgt\ndescription"
+                    edge_keywords = edge.get('keywords', '')
+                    edge_desc = edge.get('description', '')
+                    edge_content = f"{edge_keywords}\t{edge_src}\n{edge_tgt}\n{edge_desc}"
+                    edge_embedding = await embedding_func.func([edge_content])
+                    edge_vec = np.array(edge_embedding[0])
+                else:
+                    edge_vec = None
+            
+            # Calculate cosine similarity if both vectors are available
+            if query_vec is not None and edge_vec is not None:
                 import numpy as np
-                query_vec = np.array(query_embedding[0])
-                edge_vec = np.array(edge_embedding[0])
                 
                 # Normalize vectors
                 query_norm = np.linalg.norm(query_vec)
@@ -2197,6 +2335,24 @@ async def _multi_hop_expand(
         return [], []
     
     logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, max_neighbors={query_param.max_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
+    
+    # Pre-compute query embeddings for performance optimization
+    query_ll_embedding = None
+    query_hl_embedding = None
+    try:
+        # Pre-compute LL query embedding
+        if ll_keywords and entities_vdb.embedding_func and entities_vdb.embedding_func.func:
+            query_ll_result = await entities_vdb.embedding_func.func([ll_keywords])
+            query_ll_embedding = query_ll_result[0]
+        
+        # Pre-compute HL query embedding  
+        if hl_keywords and relationships_vdb.embedding_func and relationships_vdb.embedding_func.func:
+            query_hl_result = await relationships_vdb.embedding_func.func([hl_keywords])
+            query_hl_embedding = query_hl_result[0]
+            
+        logger.debug(f"Pre-computed query embeddings: ll={'✓' if query_ll_embedding else '✗'}, hl={'✓' if query_hl_embedding else '✗'}")
+    except Exception as e:
+        logger.debug(f"Error pre-computing query embeddings: {e}")
     
     all_expanded_entities = []
     all_expanded_relations = []
@@ -2250,6 +2406,37 @@ async def _multi_hop_expand(
                             "edge": edge_info
                         })
         
+        # Pre-fetch vectors for performance optimization
+        entity_vectors_cache = {}
+        relationship_vectors_cache = {}
+        
+        if neighbor_candidates:
+            # Collect unique entity names and relationships for batch vector retrieval
+            unique_entity_names = list(set(candidate["entity_name"] for candidate in neighbor_candidates))
+            unique_relationships = []
+            for candidate in neighbor_candidates:
+                edge = candidate["edge"]
+                src_id = edge.get("src_id", "")
+                tgt_id = edge.get("tgt_id", "")
+                if src_id and tgt_id:
+                    unique_relationships.append({"src_id": src_id, "tgt_id": tgt_id})
+            
+            logger.debug(f"Fetching vectors for {len(unique_entity_names)} entities and {len(unique_relationships)} relationships")
+            
+            # Batch fetch entity vectors
+            try:
+                entity_vectors_cache = await _get_entity_vectors_batch(unique_entity_names, entities_vdb)
+                logger.debug(f"Retrieved {len(entity_vectors_cache)} entity vectors from cache")
+            except Exception as e:
+                logger.debug(f"Error fetching entity vectors batch: {e}")
+            
+            # Batch fetch relationship vectors
+            try:
+                relationship_vectors_cache = await _get_relationship_vectors_batch(unique_relationships, relationships_vdb)
+                logger.debug(f"Retrieved {len(relationship_vectors_cache)} relationship vectors from cache")
+            except Exception as e:
+                logger.debug(f"Error fetching relationship vectors batch: {e}")
+        
         # Score and select best neighbors
         scored_neighbors = []
         for candidate in neighbor_candidates:
@@ -2266,7 +2453,7 @@ async def _multi_hop_expand(
                         "rank": node_data.get("degree", 0)
                     }
                     
-                    # Calculate relevance score
+                    # Calculate relevance score with vector caching
                     score = await _calculate_relevance_score(
                         full_node_data,
                         candidate["edge"],
@@ -2274,7 +2461,11 @@ async def _multi_hop_expand(
                         ll_keywords,
                         hl_keywords,
                         entities_vdb,
-                        relationships_vdb
+                        relationships_vdb,
+                        entity_vectors_cache,
+                        relationship_vectors_cache,
+                        query_ll_embedding,
+                        query_hl_embedding
                     )
                     
                     # Log first few scores for debugging

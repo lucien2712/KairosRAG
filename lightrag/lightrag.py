@@ -50,7 +50,9 @@ from lightrag.kg import (
     STORAGES,
     verify_storage_implementation,
 )
-
+import base64
+import numpy as np
+import zlib
 
 from lightrag.kg.shared_storage import (
     get_namespace_data,
@@ -3116,13 +3118,10 @@ class LightRAG:
                 node_data = entity_id_to_node.get(entity_name, {})
                 description = node_data.get('description', '')
                 
-                print(f"    - Found in graph: {entity_name in entity_id_to_node}")
-                print(f"    - Description length: {len(description)}")
+                # print(f"    - Found in graph: {entity_name in entity_id_to_node}")
+                # print(f"    - Description length: {len(description)}")
                 
                 # Decode the base64 vector (matching nano_vector_db_impl storage format)
-                import base64
-                import numpy as np
-                import zlib
                 try:
                     # Decode base64
                     compressed_vector = base64.b64decode(entity_data['vector'])

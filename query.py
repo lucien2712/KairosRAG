@@ -20,12 +20,9 @@ async def main():
         Additionally, identify any potential underlying issues that might affect TSMC.
         """
 
-        
-
         # 將時間相關模糊問題進行 rewrite
         rewritten_query = rewriter(query)
         print("Rewrite query: ", query)
-
 
         response = rag.query(
             rewritten_query,
