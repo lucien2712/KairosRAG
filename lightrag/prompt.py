@@ -192,7 +192,17 @@ Your task is to synthesize a list of descriptions of a given entity or relation 
 ---Instructions---
 1. **Comprehensiveness:** The summary must integrate key information from all provided descriptions. Do not omit important facts.
 2. **Context:** The summary must explicitly mention the name of the entity or relation for full context.
-3. **Temporal Information:** When descriptions contain temporal information (dates, quarters, years, time periods), preserve and organize this information chronologically. Present the most recent information prominently while maintaining historical context.
+3. **Temporal Information:** When descriptions contain timestamp prefixes (e.g., "2024-Q1:", "2024-Q3:", "2024-07:"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
+
+**Example:**
+Input descriptions:
+- "2024-Q1: Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
+- "2024-Q3: Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
+
+Required output format:
+"Apple technology company shows mixed quarterly performance. 2024-Q1: Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. 2024-Q3: Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
+
+DO NOT generate: "Apple technology company performance varied across 2024 quarters with early growth followed by later challenges."
 4. **Conflict:** In case of conflicting or inconsistent descriptions, determine if they originate from multiple, distinct entities or relationships that share the same name. If so, summarize each entity or relationship separately and then consolidate all summaries.
 5. **Style:** The output must be written from an objective, third-person perspective.
 6. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.

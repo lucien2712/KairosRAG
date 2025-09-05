@@ -3,7 +3,6 @@ from config import initialize_rag
 from lightrag import QueryParam
 from rewriter import rewriter
 import os
-import json
 
 
 async def main():
@@ -12,17 +11,6 @@ async def main():
         rag = None
         rag = await initialize_rag()
         print("Initialization success!!")
-
-        working_dir = os.environ["WORKING_DIR"]
-
-        # query, rewritten query 儲存
-        save_path = os.path.join(working_dir, "query_rewrite_pairs.json")
-        query_rewrite_pairs = []
-
-
-
-        mode = "hybrid"
-        
 
         query = """
         Based on [Company]: Apple, [Target Calendar Year]: 2025 Q2, 
@@ -38,24 +26,19 @@ async def main():
         rewritten_query = rewriter(query)
         print("Rewrite query: ", query)
 
-        # 保存 query 和 rewritten query 到暫存的結構
-        query_rewrite_pairs.append(
-            {"query": query, "rewritten_query": rewritten_query}
-        )
 
         response = rag.query(
             rewritten_query,
             param=QueryParam(
-                mode=mode,
+                mode="hybrid",
                 # conversation_history
                 history_turns=0,
+                chunk_top_k= 20,
                 max_total_tokens=120000,
-                max_hop=1,
+                max_hop=2,
                 max_neighbors= 30,
                 enable_rerank=False,
                 user_prompt="""
-                    /no_think.
-
                     You have to answer the question following the format below:
                     ## Title
                     ### Overview

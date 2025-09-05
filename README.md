@@ -67,7 +67,7 @@ Automatically discover domain-specific entity types to improve retrieval accurac
 ```bash
 python entity_type_augmentation.py
 ```
-Domain-specific types enable precise retrieval
+Domain-specific types enable precise retrievalgk4
 ```json
 {"iPhone Revenue": "financial_metric", "Q3 2024": "temporal_range", "Tim Cook": "person"}
 ```
@@ -84,6 +84,13 @@ All data includes complete metadata:
   "entities": [{
     "entity": "Apple",
     "description": "2024-Q3: Apple technology company...",  // Auto-prefixed
+    "created_at": "2024-09-04 15:30:45",
+    "file_path": "earnings.pdf"
+  }],
+  "relations": [{
+    "src_id": "Apple",
+    "tgt_id": "iPhone Revenue",
+    "description": "2024-Q3: Apple generates revenue from iPhone sales...",  // Auto-prefixed
     "created_at": "2024-09-04 15:30:45",
     "file_path": "earnings.pdf"
   }],
@@ -106,7 +113,7 @@ All data includes complete metadata:
 python entity_type_augmentation.py
 
 # 2. Insert documents with timestamps
-await rag.insert(documents, timestamps=["2024-Q3"])
+await rag.insert(documents, timestamps=["2024-Q3"], file_path)
 
 # 3. Query with enhanced retrieval
 response = rag.query(query, param=QueryParam(max_hop=2))

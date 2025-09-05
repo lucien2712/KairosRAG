@@ -23,7 +23,10 @@ async def initialize_rag():
         working_dir=WORKING_DIR,
         embedding_func=openai_embed,
         llm_model_func=gpt_4o_mini_complete,
+        chunk_token_size=1200,
+        chunk_overlap_token_size=100
     )
+    
     # IMPORTANT: Both initialization calls are required!
     await rag.initialize_storages()  # Initialize storage backends
     await initialize_pipeline_status()  # Initialize processing pipeline
