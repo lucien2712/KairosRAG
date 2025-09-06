@@ -53,7 +53,7 @@ async def main():
         print("Initialization success")
 
         # 讀取 PDF 並建立索引
-        texts, file_paths, fiscal_years = process_files_to_list("./input")
+        texts, file_paths, fiscal_years = process_files_to_list("./inputs")
 
         if texts:
             rag.insert(texts, file_paths=file_paths, timestamps=fiscal_years)

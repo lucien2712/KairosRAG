@@ -1,6 +1,5 @@
 import config
 import os
-import textract
 import json
 from openai import OpenAI
 
@@ -8,37 +7,53 @@ client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
 )
 
-ENTITY_TYPE_PATH = os.path.join(os.environ["WORKING_DIR"], "entity_type.json")
+ENTITY_TYPE_PATH = os.path.join("lightrag", "entity_types", "entity_type.json")
 DATASET_STATUS_PATH = os.path.join(
-    os.environ["WORKING_DIR"], "entity_check_status.json"
+    "lightrag", "entity_types", "entity_check_status.json"
 )
 
 # 預設 Entity Types
 DEFAULT_ENTITY_TYPES = [
     {
-        "entity_type": "organization",
-        "explanation": "An entity representing organizations, companies, or institutions.",
+        "entity_type": "Organization",
+        "explanation": "An entity representing organizations, companies, or institutions."
     },
     {
-        "entity_type": "person",
-        "explanation": "An entity representing individual persons.",
+        "entity_type": "Person",
+        "explanation": "An entity representing individual persons."
     },
     {
-        "entity_type": "geo",
-        "explanation": "An entity representing geographical locations.",
+        "entity_type": "Location",
+        "explanation": "An entity representing geographical locations."
     },
     {
-        "entity_type": "event",
-        "explanation": "An entity representing events or activities.",
+        "entity_type": "Event",
+        "explanation": "An entity representing events or activities."
     },
     {
-        "entity_type": "category",
-        "explanation": "An entity representing general categories or classifications.",
+        "entity_type": "Technology",
+        "explanation": "An entity representing technological concepts, tools, or innovations."
+    },
+    {
+        "entity_type": "Equipment",
+        "explanation": "An entity representing equipment, machinery, or devices."
+    },
+    {
+        "entity_type": "Product",
+        "explanation": "An entity representing products, goods, or services."
+    },
+    {
+        "entity_type": "Document",
+        "explanation": "An entity representing documents, reports, or written materials."
+    },
+    {
+        "entity_type": "Category",
+        "explanation": "An entity representing general categories or classifications."
     },
     {
         "entity_type": "temporal_range",
-        "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July').",
-    },
+        "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July')."
+    }
 ]
 
 
@@ -61,7 +76,7 @@ def process_files(folder_path):
     processed_files = load_json(DATASET_STATUS_PATH, {})
     file_text_pairs = []
 
-    all_files = [f for f in os.listdir(folder_path) if f.endswith(".pdf")]
+    all_files = [f for f in os.listdir(folder_path) if f.endswith(".txt")]
     for file_name in all_files:
         if file_name in processed_files:
             print(f"Skipped: {file_name} (already processed)")
@@ -69,8 +84,9 @@ def process_files(folder_path):
 
         file_path = os.path.join(folder_path, file_name)
         try:
-            text_content = textract.process(file_path)
-            file_text_pairs.append((file_name, text_content.decode("utf-8")))
+            with open(file_path, "r", encoding="utf-8") as f:
+                text_content = f.read()
+            file_text_pairs.append((file_name, text_content))
             print(f"Success: {file_name}")
         except Exception as e:
             print(f"Failed to process {file_name}: {e}")
@@ -112,7 +128,7 @@ def process_file_with_llm(file_content, current_entity_types):
             [et["entity_type"] for et in current_entity_types]
         )
         response = client.chat.completions.create(
-            model="qwen3-235b-fp8",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -188,7 +204,7 @@ def process_file_with_llm(file_content, current_entity_types):
 def refine_entity_types(entity_types):
     try:
         response = client.chat.completions.create(
-            model="qwen3-235b-fp8",
+            model="gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
@@ -256,7 +272,7 @@ def refine_entity_types(entity_types):
 
 
 if __name__ == "__main__":
-    folder_path = "./transcript"
+    folder_path = "./inputs"
 
     # Step 1: 讀取尚未處理的檔案
     file_text_pairs = process_files(folder_path)
