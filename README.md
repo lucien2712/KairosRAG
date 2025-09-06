@@ -1,28 +1,32 @@
 # KairosRAG
 
-Enhanced version of [LightRAG](https://github.com/HKUDS/LightRAG) with automatic timestamp integration, improved multi-hop retrieval, and adaptive entity type discovery.
+**KairosRAG** is an enhanced framework built on top of [LightRAG](https://github.com/HKUDS/LightRAG), introducing **time-awareness, multi-hop retrieval optimization, adaptive schema induction, and agentic entity management** for domain-specific and temporally-sensitive knowledge graphs.
 
-## 🚀 Key Enhancements
+## 🚀 Key Contributions
 
-### ✨ **Automatic Timestamp Integration**
-**Problem**: Time-sensitive documents lose context when temporal information is inconsistent. Traditional RAG relies on LLMs to remember adding timestamps.
+### ⏳ **Automatic Timestamp Integration**
 
-**Solution**: System automatically prefixes user-provided timestamps to all entity/relation descriptions, ensuring consistent temporal context.
+* **Problem**: Time-sensitive documents lose context when temporal information is inconsistent.
+* **Solution**: KairosRAG automatically prefixes user-provided timestamps to entity and relation descriptions, ensuring consistent temporal alignment without relying on LLM memory.
 
-### 🔍 **Enhanced Multi-hop Retrieval** 
-**Problem**: The original LightRAG primarily supports one-hop expansion, which limits the ability to capture indirect but meaningful connections across documents. 
+### 🔍 **Embedding-Guided Multi-hop Retrieval**
 
-**Solution**: Our system introduces embedding-guided multi-hop retrieval, where candidate paths are explored by jointly considering relation similarity, entity similarity, and graph distance. *Note: Currently implemented for NanoVectorDB backend only.*
+* **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
+* **Solution**: KairosRAG explores candidate paths by jointly considering **entity similarity, relation similarity, and hop distance decay**, enabling richer multi-hop reasoning.
+* *Currently implemented for the NanoVectorDB backend.*
 
 ### 🧠 **Adaptive Entity Type Discovery**
-**Problem**: Predefined and incomplete entity type schemas often fail in domain-specific contexts. For example, when analyzing financial reports, metrics such as EPS or operating margin may be incorrectly forced into generic categories (e.g., "category"), reducing entity extraction accuracy and retrieval precision.
 
-**Solution**: The system dynamically analyzes document content to discover and suggest new domain-specific entity types, extending beyond the static schema. This adaptive process improves entity recognition accuracy and ensures domain-relevant knowledge is preserved in the graph.
+* **Problem**: Predefined static schemas (e.g., Person, Organization, Category) often misclassify domain-specific metrics (e.g., EPS, Operating Margin).
+* **Solution**: KairosRAG dynamically suggests and augments **domain-specific entity types** during extraction, improving recognition accuracy and retrieval relevance.
 
 ### ⚡ **Agentic Entity Merging**
-**Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
 
-**Innovation**: Combines vector similarity pre-filtering with LLM decision making for intelligent entity deduplication. *Note: Currently implemented for NanoVectorDB backend only.*
+* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
+* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication.
+* *Currently implemented for the NanoVectorDB backend.*
+
+---
 
 ## 🛠️ Installation
 
@@ -32,6 +36,8 @@ cd KairosRAG
 pip install -e .
 ```
 
+---
+
 ## 🚀 Quick Start
 
 ```python
@@ -40,7 +46,7 @@ from lightrag import LightRAG, QueryParam
 from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
 
 async def main():
-    # Initialize
+    # Initialize KairosRAG
     rag = LightRAG(
         working_dir="./data",
         llm_model_func=gpt_4o_mini_complete,
@@ -61,40 +67,46 @@ async def main():
         param=QueryParam(mode="hybrid", max_hop=2)
     )
     
-    # Run agentic entity merging (requires NanoVectorDB)
+    # Run agentic entity merging (NanoVectorDB only)
     result = await rag.aagentic_merging(threshold=0.8)
-    # Example: Merged "Timothy D. Cook" ← "Tim Cook" (similarity: 0.903)
+    # Example: "Tim Cook" merged into "Timothy D. Cook" (similarity: 0.903)
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+---
+
 ## 🏗️ Workflow
 
-```python
+```bash
 # 1. Discover entity types for your domain
 python entity_type_augmentation.py
 
 # 2. Insert documents with timestamps
-await rag.insert(documents, timestamps=["2024-Q3"], file_path)
+await rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"])
 
-# 3. Run agentic entity merging (requires NanoVectorDB)
+# 3. Run agentic entity merging (NanoVectorDB only)
 result = await rag.agentic_merging(threshold=0.8)
 
-# 4. Query with enhanced retrieval
+# 4. Query with enhanced multi-hop retrieval
 response = rag.query(query, param=QueryParam(max_hop=2))
 ```
 
+---
+
 ## 🤝 Contributing
 
-This project extends **LightRAG** with:
+KairosRAG extends **LightRAG** with:
 
-1. **Automatic Timestamp Integration** – Adds consistent temporal metadata without LLM dependence.
-2. **Enhanced Multi-hop Retrieval** – Embedding-guided path search with provenance, chunk balancing, and vector caching.
-3. **Adaptive Entity Type Discovery** – Dynamically suggests domain-specific entity types beyond static schemas.
-4. **Agentic Entity Merging** – Vector similarity + LLM merging for cleaner, deduplicated knowledge graphs.
+1. **Automatic Timestamp Integration** – Consistent temporal metadata injection.
+2. **Embedding-Guided Multi-hop Retrieval** – Path scoring with relation/entity similarity and hop decay.
+3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
+4. **Agentic Entity Merging** – Hybrid vector+LLM pipeline for robust deduplication.
 
+---
 
 ## 🙏 Acknowledgments
 
-Built upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team. Enhanced with automatic timestamp processing, performance-optimized multi-hop retrieval, adaptive entity type discovery, and intelligent entity merging.
+KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License).
+We extend it with **time-awareness, adaptive schema induction, embedding-guided multi-hop reasoning, and agentic entity management**.
