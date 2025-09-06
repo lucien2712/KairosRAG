@@ -55,7 +55,7 @@ def load_entity_types():
     ]
 
 DEFAULT_ENTITY_TYPES = load_entity_types()
-print(DEFAULT_ENTITY_TYPES)
+# print(DEFAULT_ENTITY_TYPES)
 # Separator for graph fields
 GRAPH_FIELD_SEP = "<SEP>"
 
