@@ -77,3 +77,7 @@ memory-bank/
 
 CLAUDE.md
 result.txt
+.claude/
+input/
+note.txt
+./lightrag/entity_types/
