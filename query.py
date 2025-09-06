@@ -32,6 +32,8 @@ async def main():
                 history_turns=0,
                 chunk_top_k= 20,
                 max_total_tokens=120000,
+                max_entity_tokens=30000,
+                max_relation_tokens=30000,
                 max_hop=3,
                 max_neighbors= 30,
                 enable_rerank=False,
