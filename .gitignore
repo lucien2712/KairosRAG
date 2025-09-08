@@ -80,4 +80,4 @@ result.txt
 .claude/
 input/
 note.txt
-./lightrag/entity_types/
+lightrag/entity_types/
