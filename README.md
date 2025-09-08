@@ -46,7 +46,7 @@ where $A$ = adjacency matrix, $R$ = random projection, $k$ = iteration count
 * **Problem**: Predefined static schemas (e.g., Person, Organization, Category) often misclassify domain-specific metrics (e.g., EPS, Operating Margin).
 * **Solution**: KairosRAG dynamically suggests and augments **domain-specific entity types** during extraction, improving recognition accuracy and retrieval relevance.
 
-### ⚡ **Agentic Entity Merging**
+### ⚡ **Agentic Entity Canonicalization**
 
 * **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
 * **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication.
@@ -152,7 +152,7 @@ KairosRAG extends **LightRAG** with:
 1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
 2. **Three-Way Parallel Expansion** – Multi-hop traversal, Personalized PageRank, and FastRP structural similarity operating independently.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
-4. **Agentic Entity Merging** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
+4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 
 ---
 
