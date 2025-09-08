@@ -129,7 +129,7 @@ if __name__ == "__main__":
 python entity_type_augmentation.py
 
 # 2. Insert documents with timestamps
-await rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"])
+rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"])
 
 # 3. Run agentic entity merging (NanoVectorDB only)
 result = await rag.agentic_merging(threshold=0.8)
