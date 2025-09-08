@@ -12,7 +12,6 @@
 **Mathematical Framework:**
 
 $$Entity'(e, t) = T(t) \oplus Entity(e)$$
-
 $$Relation'(r, t) = T(t) \oplus Relation(r)$$
 
 where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatenation
@@ -29,14 +28,17 @@ $$R_{final} = R_{multihop} \cup R_{ppr} \cup R_{fastrp}$$
 
 **Multi-hop Expansion:**
 $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
+
 where $\delta = 0.8$ (distance decay), $h$ = hop count
 
 **Personalized PageRank:**
 $$PPR(v; S) = (1-d) \cdot p_S(v) + d \cdot \sum_{u \to v} \frac{PPR(u; S)}{|out(u)|}$$
+
 where $S$ = seed entities, $d = 0.85$ (damping factor)
 
 **FastRP Structural Similarity:**
 $$FastRP(G) = \Phi(A^k \cdot R)$$
+
 where $A$ = adjacency matrix, $R$ = random projection, $k$ = iteration count
 
 ### 🧠 **Adaptive Entity Type Discovery**
@@ -54,6 +56,7 @@ where $A$ = adjacency matrix, $R$ = random projection, $k$ = iteration count
 
 **Vector Similarity Pre-filtering:**
 $$C = \{(e_i, e_j) | cosine(emb(e_i), emb(e_j)) > \theta, i < j\}$$
+
 where $\theta$ = similarity threshold (e.g., 0.8)
 
 **LLM Decision Function:**
