@@ -70,7 +70,7 @@ $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 ## 🛠️ Installation
 
 ```bash
-git clone https://github.com/your-username/KairosRAG.git
+git clone https://github.com/lucien2712/KairosRAG.git
 cd KairosRAG
 pip install -e .
 ```
