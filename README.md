@@ -137,6 +137,7 @@ result = await rag.agentic_merging(threshold=0.8)
 # 4. Query with three-way parallel expansion
 response = rag.query(query, param=QueryParam(
     max_hop=2,           # Multi-hop traversal
+    max_neighbors=30,    # Max neighbor per node
     top_ppr_nodes=5,     # Personalized PageRank entities
     top_fastrp_nodes=5   # FastRP structural entities
 ))
