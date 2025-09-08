@@ -17,14 +17,14 @@ Given a text document and a list of entity types, identify all entities of those
 1. Recognizing definitively conceptualized entities in text. For each identified entity, extract the following information:
   - entity_name: Name of the entity, use same language as input text. If English, capitalized the name
   - entity_type: Categorize the entity using the provided `Entity_types` list. If a suitable category cannot be determined, classify it as "Other".
-  - entity_description: Provide a comprehensive description of the entity's attributes and activities based on the information present in the input text. If a timestamp is provided and adds meaningful temporal context, you may begin the description with the specific time reference (e.g., "{timestamp}: "). If temporal information is available in the text (dates, quarters, years, time periods) and relevant to the entity, include it naturally in the description. To ensure clarity and precision, all descriptions must replace pronouns and referential terms (e.g., "this document," "our company," "I," "you," "he/she") with the specific nouns they represent.
+  - entity_description: Provide a comprehensive description of the entity's attributes and activities based on the information present in the input text. 
 2. Format each entity as: ("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
 3. From the entities identified in step 1, identify all pairs of (source_entity, target_entity) that are directly and clearly related based on the text. Unsubstantiated relationships must be excluded from the output.
 For each pair of related entities, extract the following information:
   - source_entity: name of the source entity, as identified in step 1
   - target_entity: name of the target entity, as identified in step 1
   - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details
-  - relationship_description: Explain the nature of the relationship between the source and target entities, providing a clear rationale for their connection. If a timestamp is provided and adds meaningful temporal context, you may begin the description with the specific time reference (e.g., "{timestamp}: "). If temporal information is available in the text and relevant to when this relationship was observed or reported, include it naturally in the description.
+  - relationship_description: Explain the nature of the relationship between the source and target entities, providing a clear rationale for their connection. 
 4. Format each relationship as: ("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_keywords>{tuple_delimiter}<relationship_description>)
 5. Use `{tuple_delimiter}` as field delimiter. Use `{record_delimiter}` as the entity or relation list delimiter.
 6. Return identified entities and relationships in {language}.
@@ -42,7 +42,6 @@ For each pair of related entities, extract the following information:
 
 ---Input---
 Entity_types: [{entity_types}]
-Timestamp: {timestamp}
 Text:
 ```
 {input_text}
@@ -192,21 +191,22 @@ Your task is to synthesize a list of descriptions of a given entity or relation 
 ---Instructions---
 1. **Comprehensiveness:** The summary must integrate key information from all provided descriptions. Do not omit important facts.
 2. **Context:** The summary must explicitly mention the name of the entity or relation for full context.
-3. **Temporal Information:** When descriptions contain timestamp prefixes (e.g., "2024-Q1:", "2024-Q3:", "2024-07:"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
+3. **Temporal Information:** When descriptions contain timestamp prefixes (e.g., "The following content is from Fiscal Year 2024-Q1:", "The content is from Fiscal Year 2024-Q3:", "2024-07:"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
 
 **Example:**
 Input descriptions:
-- "2024-Q1: Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
-- "2024-Q3: Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
+- "The following content is from Fiscal Year 2024-Q1: Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
+- "The following content is from Fiscal Year 2024-Q3: Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
 
 Required output format:
-"Apple technology company shows mixed quarterly performance. 2024-Q1: Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. 2024-Q3: Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
+"Apple technology company shows mixed quarterly performance. The following content is from Fiscal Year 2024-Q1: Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. The following content is from Fiscal Year 2024-Q3: Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
 
 DO NOT generate: "Apple technology company performance varied across 2024 quarters with early growth followed by later challenges."
-4. **Conflict:** In case of conflicting or inconsistent descriptions, determine if they originate from multiple, distinct entities or relationships that share the same name. If so, summarize each entity or relationship separately and then consolidate all summaries.
-5. **Style:** The output must be written from an objective, third-person perspective.
-6. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.
-7. **Language:** The entire output must be written in {language}.
+4. **Conflict Resolution:** In case of conflicting or inconsistent descriptions from different time periods, prioritize more recent information while preserving historical context. If conflicts arise from distinct entities sharing the same name, treat them separately. When temporal information conflicts (e.g., same quarter with different data), note the discrepancy explicitly.
+5. **Relevance Filtering:** Focus on substantive information. Remove redundant phrases while preserving unique details from each description.
+6. **Style:** The output must be written from an objective, third-person perspective.
+7. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.
+8. **Language:** The entire output must be written in {language}.
 
 ---Data---
 {description_type} Name: {description_name}
