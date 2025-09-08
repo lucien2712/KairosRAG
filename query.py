@@ -24,7 +24,7 @@ async def main():
         rewritten_query = rewriter(query)
         print("Rewrite query: ", query)
 
-        response = rag.query(
+        response = await rag.aquery(
             rewritten_query,
             param=QueryParam(
                 mode="hybrid",
@@ -37,6 +37,8 @@ async def main():
                 max_hop=3,
                 max_neighbors= 30,
                 enable_rerank=False,
+                top_ppr_nodes=5,       
+                top_fastrp_nodes=5,     
                 user_prompt="""
                     You have to answer the question following the format below:
                     ## Title

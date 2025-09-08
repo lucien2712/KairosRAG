@@ -1738,6 +1738,61 @@ async def merge_nodes_and_edges(
     async with pipeline_status_lock:
         pipeline_status["latest_message"] = log_message
         pipeline_status["history_messages"].append(log_message)
+        
+    # Compute and store enhanced embeddings if node embedding is enabled
+    if global_config.get("enable_node_embedding", False) and global_config.get("node_embedding"):
+        try:
+            logger.info("Computing enhanced embeddings with FastRP + PageRank")
+            
+            # Prepare entities and relations data for graph construction
+            entities_data = []
+            relations_data = []
+            text_embeddings = {}
+            
+            # Extract entity data from processed_entities (list of entity data)
+            for entity_data in processed_entities:
+                if entity_data:
+                    entity_name = entity_data.get('entity_name', '')
+                    if entity_name:
+                        entities_data.append({
+                            'entity_name': entity_name,
+                            'description': entity_data.get('description', ''),
+                            'entity_type': entity_data.get('entity_type', 'unknown')
+                        })
+                        
+                        # Get text embedding if available
+                        if hasattr(entity_data, 'get') and entity_data.get('embedding'):
+                            text_embeddings[entity_name] = entity_data['embedding']
+            
+            # Extract relation data from processed_edges (list of edge data)
+            for edge_data in processed_edges:
+                if edge_data:
+                    relations_data.append({
+                        'src_id': edge_data.get('src_id', ''),
+                        'tgt_id': edge_data.get('tgt_id', ''),
+                        'description': edge_data.get('description', ''),
+                        'keywords': edge_data.get('keywords', '')
+                    })
+            
+            # Compute FastRP + PageRank embeddings (dual-path approach)
+            if entities_data and relations_data:
+                node_embedding = global_config.get("node_embedding")
+                if not node_embedding:
+                    logger.error("node_embedding not found in global_config during insertion")
+                else:
+                    # This computes and saves FastRP embeddings + PageRank scores for later use
+                    await node_embedding.compute_embeddings_during_insert(
+                        entities_data, relations_data, text_embeddings
+                    )
+                
+                # Update pipeline status
+                async with pipeline_status_lock:
+                    pipeline_status["latest_message"] = f"FastRP + PageRank computed for structural path expansion"
+                    pipeline_status["history_messages"].append(f"Node embedding computation completed")
+                        
+        except Exception as e:
+            logger.error(f"Error computing enhanced embeddings: {e}")
+            # Don't raise exception to avoid affecting main flow
 
 
 async def extract_entities(
@@ -2008,6 +2063,7 @@ async def kg_query(
         relationships_vdb,
         text_chunks_db,
         query_param,
+        global_config,
         chunks_vdb,
     )
 
@@ -2320,6 +2376,18 @@ async def _calculate_relevance_score(
     return final_score
 
 
+def _allocate_expansion_resources(total_neighbors: int, top_fastrp_nodes: int) -> tuple[int, int]:
+    """Allocate neighbor budget between semantic expansion and structural analysis."""
+    
+    # Structural analysis uses exactly top_fastrp_nodes
+    structural_neighbors = min(top_fastrp_nodes, total_neighbors - 1)  # Leave at least 1 for semantic
+    
+    # Calculate semantic neighbors from remaining budget
+    semantic_neighbors = total_neighbors - structural_neighbors
+    
+    return semantic_neighbors, structural_neighbors
+
+
 async def _multi_hop_expand(
     seed_nodes: list[dict],
     ll_keywords: str,
@@ -2328,11 +2396,696 @@ async def _multi_hop_expand(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    global_config: dict[str, str] = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Multi-hop expansion using BFS with relevance scoring."""
+    """Multi-hop expansion using BFS with relevance scoring.
+    
+    If top_fastrp_nodes > 0, performs dual-path expansion combining
+    semantic and structural reasoning.
+    """
     
     if query_param.max_hop <= 0:
         return [], []
+        
+    # Check if dual-path expansion is enabled (when top_fastrp_nodes > 0)
+    if (query_param.top_fastrp_nodes > 0 and 
+        global_config and 
+        global_config.get("enable_node_embedding", False) and 
+        global_config.get("node_embedding")):
+        
+        logger.info(f"Semantic expansion + structural analysis: top_fastrp_nodes={query_param.top_fastrp_nodes}")
+        return await _semantic_expansion_plus_structural_analysis(
+            seed_nodes, ll_keywords, hl_keywords, query_param, 
+            knowledge_graph_inst, entities_vdb, relationships_vdb, global_config
+        )
+    else:
+        # Original single-path expansion
+        logger.info("Single-path multi-hop expansion (original logic)")
+        return await _original_multi_hop_expand(
+            seed_nodes, ll_keywords, hl_keywords, query_param,
+            knowledge_graph_inst, entities_vdb, relationships_vdb
+        )
+
+
+async def _semantic_expansion_plus_structural_analysis(
+    seed_nodes: list[dict],
+    ll_keywords: str,
+    hl_keywords: str,
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    global_config: dict[str, str],
+) -> tuple[list[dict], list[dict]]:
+    """Three-way parallel expansion: Multi-hop + PPR + FastRP with independent pools."""
+    
+    logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + fastrp({query_param.top_fastrp_nodes})")
+    
+    # Create params for multi-hop expansion (keeps original max_neighbors)
+    multihop_param = QueryParam(
+        max_hop=query_param.max_hop,
+        max_neighbors=query_param.max_neighbors,
+        multi_hop_relevance_threshold=query_param.multi_hop_relevance_threshold,
+        top_fastrp_nodes=0,  # Multi-hop only, no structural analysis
+    )
+    
+    # Execute three approaches in parallel
+    multihop_task = _original_multi_hop_expand(
+        seed_nodes, ll_keywords, hl_keywords, multihop_param,
+        knowledge_graph_inst, entities_vdb, relationships_vdb
+    )
+    
+    ppr_task = _independent_ppr_analysis(
+        seed_nodes, query_param, knowledge_graph_inst, global_config
+    )
+    
+    fastrp_task = _independent_fastrp_analysis(
+        seed_nodes, query_param, knowledge_graph_inst, global_config
+    )
+    
+    # Wait for all three approaches to complete
+    (multihop_entities, multihop_relations), ppr_entities, fastrp_entities = await asyncio.gather(
+        multihop_task, ppr_task, fastrp_task
+    )
+    
+    logger.info(f"Multi-hop found: {len(multihop_entities)} entities, {len(multihop_relations)} relations")
+    logger.info(f"PPR found: {len(ppr_entities)} entities")
+    logger.info(f"FastRP found: {len(fastrp_entities)} entities")
+    
+    # Find relations for PPR and FastRP entities
+    ppr_relations = await _find_relations_for_entities(ppr_entities, relationships_vdb)
+    fastrp_relations = await _find_relations_for_entities(fastrp_entities, relationships_vdb)
+    
+    # Merge and deduplicate results from three sources
+    merged_entities = _merge_three_way_entities(
+        multihop_entities, ppr_entities, fastrp_entities
+    )
+    merged_relations = _merge_three_way_relations(
+        multihop_relations, ppr_relations, fastrp_relations
+    )
+    
+    logger.info(f"Three-way merged results: {len(merged_entities)} entities, {len(merged_relations)} relations")
+    
+    return merged_entities, merged_relations
+
+
+async def _independent_ppr_analysis(
+    seed_nodes: list[dict],
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict[str, str]
+) -> list[dict]:
+    """Independent PPR analysis - select top N entities by PageRank score."""
+    
+    if query_param.top_ppr_nodes <= 0:
+        return []
+    
+    try:
+        # Get node embedding instance
+        node_embedding = global_config.get("node_embedding")
+        if not node_embedding:
+            logger.warning("Node embedding not available for PPR analysis")
+            return []
+        
+        # Extract seed entity names
+        seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
+        if not seed_entity_names:
+            logger.warning("No seed entities for PPR analysis")
+            return []
+        
+        logger.info(f"PPR analysis from {len(seed_entity_names)} seed entities")
+        
+        # Compute Personalized PageRank scores
+        ppr_scores = node_embedding.compute_personalized_pagerank(seed_entity_names)
+        if not ppr_scores:
+            logger.warning("No PPR scores computed")
+            return []
+        
+        # Get all entities (excluding seeds) and sort by PPR score
+        all_entities = [
+            (entity_name, score) for entity_name, score in ppr_scores.items()
+            if entity_name not in seed_entity_names
+        ]
+        
+        if not all_entities:
+            logger.warning("No entities found for PPR ranking")
+            return []
+        
+        # Sort by PageRank score and select top N
+        all_entities.sort(key=lambda x: x[1], reverse=True)
+        top_entities = all_entities[:query_param.top_ppr_nodes]
+        
+        logger.info(f"PPR selected top {len(top_entities)} entities from {len(all_entities)} total entities")
+        
+        # Get entity details from knowledge graph
+        ppr_entities = []
+        for entity_name, ppr_score in top_entities:
+            entity_data = await knowledge_graph_inst.get_node(entity_name)
+            if entity_data:
+                entity_copy = dict(entity_data)
+                entity_copy.update({
+                    "entity_name": entity_name,
+                    "pagerank_score": ppr_score,
+                    "discovery_method": "ppr_analysis",
+                    "rank": entity_data.get("degree", 0),
+                })
+                ppr_entities.append(entity_copy)
+        
+        logger.info(f"PPR analysis completed: {len(ppr_entities)} entities with avg PageRank: {sum(e['pagerank_score'] for e in ppr_entities) / len(ppr_entities) if ppr_entities else 0:.4f}")
+        
+        return ppr_entities
+        
+    except Exception as e:
+        logger.error(f"PPR analysis failed: {e}")
+        return []
+
+
+async def _independent_fastrp_analysis(
+    seed_nodes: list[dict],
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    global_config: dict[str, str]
+) -> list[dict]:
+    """Independent FastRP analysis - select top N entities by structural similarity."""
+    
+    if query_param.top_fastrp_nodes <= 0:
+        return []
+    
+    try:
+        # Get node embedding instance
+        node_embedding = global_config.get("node_embedding")
+        if not node_embedding:
+            logger.warning("Node embedding not available for FastRP analysis")
+            return []
+        
+        # Extract seed entity names
+        seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
+        if not seed_entity_names:
+            logger.warning("No seed entities for FastRP analysis")
+            return []
+        
+        logger.info(f"FastRP analysis from {len(seed_entity_names)} seed entities")
+        
+        # Get all entities for similarity calculation
+        all_entity_names = list(node_embedding.fastrp_embeddings.keys())
+        candidate_entities = [name for name in all_entity_names if name not in seed_entity_names]
+        
+        if not candidate_entities:
+            logger.warning("No candidate entities for FastRP analysis")
+            return []
+        
+        # Calculate FastRP similarity for all candidates
+        fastrp_candidates = []
+        for entity_name in candidate_entities:
+            try:
+                fastrp_similarity = _compute_fastrp_similarity(
+                    entity_name, seed_entity_names, node_embedding
+                )
+                
+                # Get entity details from knowledge graph
+                entity_data = await knowledge_graph_inst.get_node(entity_name)
+                if entity_data:
+                    fastrp_candidates.append({
+                        "entity_name": entity_name,
+                        "fastrp_similarity": fastrp_similarity,
+                        "discovery_method": "fastrp_analysis",
+                        "rank": entity_data.get("degree", 0),
+                        **entity_data
+                    })
+                    
+            except Exception as e:
+                logger.debug(f"Error processing FastRP candidate {entity_name}: {e}")
+        
+        if not fastrp_candidates:
+            logger.warning("No valid FastRP candidates found")
+            return []
+        
+        # Sort by FastRP similarity and select top N
+        fastrp_candidates.sort(key=lambda x: x["fastrp_similarity"], reverse=True)
+        top_fastrp_entities = fastrp_candidates[:query_param.top_fastrp_nodes]
+        
+        logger.info(f"FastRP selected top {len(top_fastrp_entities)} entities from {len(fastrp_candidates)} candidates")
+        logger.info(f"FastRP analysis completed: avg similarity: {sum(e['fastrp_similarity'] for e in top_fastrp_entities) / len(top_fastrp_entities) if top_fastrp_entities else 0:.4f}")
+        
+        return top_fastrp_entities
+        
+    except Exception as e:
+        logger.error(f"FastRP analysis failed: {e}")
+        return []
+
+
+async def _global_structural_analysis(
+    seed_nodes: list[dict],
+    ll_keywords: str,
+    hl_keywords: str,
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+    global_config: dict[str, str],
+) -> tuple[list[dict], list[dict]]:
+    """Global structural analysis using PersonalizedPageRank + FastRP filtering to find structurally important entities."""
+    
+    if not global_config:
+        logger.error("global_config is None in structural analysis")
+        return [], []
+    
+    node_embedding = global_config.get("node_embedding")
+    if not node_embedding:
+        logger.error("node_embedding not found in global_config")
+        return [], []
+    
+    # Extract seed entity names
+    seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
+    
+    if not seed_entity_names:
+        logger.warning("No seed entities found for structural analysis")
+        return [], []
+        
+    logger.info(f"Global structural analysis from {len(seed_entity_names)} seed entities")
+    
+    try:
+        # 1. Compute Personalized PageRank to find structurally important entities
+        ppr_scores = node_embedding.compute_personalized_pagerank(seed_entity_names)
+        
+        if not ppr_scores:
+            logger.warning("No PageRank scores computed, falling back to empty results")
+            return [], []
+        
+        # 2. Select top PageRank entities as candidates
+        all_entities = [
+            (entity_name, score) for entity_name, score in ppr_scores.items()
+            if entity_name not in seed_entity_names
+        ]
+        
+        if not all_entities:
+            logger.warning("No entities found for PageRank ranking")
+            return [], []
+            
+        # Sort by PageRank score and select top N candidates
+        all_entities.sort(key=lambda x: x[1], reverse=True)
+        candidate_entities = [entity_name for entity_name, _ in all_entities[:query_param.top_ppr_nodes]]
+        
+        logger.info(f"Selected top {len(candidate_entities)} PageRank candidates from {len(all_entities)} total entities")
+        
+        # 3. Apply FastRP similarity filtering (structural relatedness to seed entities)
+        structural_candidates = []
+        
+        for entity_name in candidate_entities:
+            try:
+                # Calculate FastRP structural similarity to seed entities
+                fastrp_similarity = _compute_fastrp_similarity(
+                    entity_name, seed_entity_names, node_embedding
+                )
+                
+                # Get entity details from knowledge graph (no threshold filtering)
+                entity_data = await knowledge_graph_inst.get_node(entity_name)
+                if entity_data:
+                    structural_candidates.append({
+                        "entity_name": entity_name,
+                        "pagerank_score": ppr_scores[entity_name],
+                        "fastrp_similarity": fastrp_similarity,
+                        "discovery_method": "structural_analysis",
+                        "rank": entity_data.get("degree", 0),
+                        **entity_data
+                    })
+                        
+            except Exception as e:
+                logger.debug(f"Error processing candidate {entity_name}: {e}")
+                
+        # Sort by combined structural importance score (PageRank 60% + FastRP similarity 40%)
+        structural_candidates.sort(
+            key=lambda x: x["pagerank_score"] * 0.6 + x["fastrp_similarity"] * 0.4,
+            reverse=True
+        )
+        
+        # Select top N FastRP nodes
+        final_entities = structural_candidates[:query_param.top_fastrp_nodes]
+        
+        logger.info(f"Selected top {len(final_entities)} FastRP entities from {len(structural_candidates)} candidates")
+        
+        # 4. Find relations that connect structurally important entities
+        final_relations = await _find_structural_relations(
+            final_entities, seed_entity_names, relationships_vdb, query_param
+        )
+        
+        logger.info(f"Structural analysis found {len(final_entities)} entities with avg PageRank: {sum(e['pagerank_score'] for e in final_entities) / len(final_entities) if final_entities else 0:.4f}")
+        
+        return final_entities, final_relations
+        
+    except Exception as e:
+        logger.error(f"Global structural analysis failed: {e}")
+        return [], []
+
+
+async def _find_structural_relations(
+    selected_entities: list[dict],
+    seed_entity_names: list[str], 
+    relationships_vdb: BaseVectorStorage,
+    query_param: QueryParam
+) -> list[dict]:
+    """Find relations that connect structurally important entities."""
+    if not selected_entities:
+        return []
+    
+    try:
+        # Get all entity names (selected + seeds)
+        all_entity_names = seed_entity_names + [e["entity_name"] for e in selected_entities]
+        
+        # Find relations between these entities
+        structural_relations = []
+        
+        for entity_name in all_entity_names:
+            # Search for relations involving this entity
+            try:
+                # Search relations where this entity is source or target
+                relation_results = await relationships_vdb.query(entity_name, top_k=20)
+                
+                for relation_data in relation_results:
+                    src_id = relation_data.get("src_id", "")
+                    tgt_id = relation_data.get("tgt_id", "")
+                    
+                    # Keep relations that connect our selected entities
+                    if (src_id in all_entity_names and tgt_id in all_entity_names):
+                        relation_info = {
+                            "src_id": src_id,
+                            "tgt_id": tgt_id,
+                            "description": relation_data.get("description", ""),
+                            "keywords": relation_data.get("keywords", ""),
+                            "discovery_method": "structural_analysis",  # More descriptive
+                            "rank": relation_data.get("rank", 0),
+                            **relation_data
+                        }
+                        
+                        # Avoid duplicates
+                        if not any(
+                            r["src_id"] == src_id and r["tgt_id"] == tgt_id 
+                            for r in structural_relations
+                        ):
+                            structural_relations.append(relation_info)
+                            
+            except Exception as e:
+                logger.debug(f"Error finding relations for {entity_name}: {e}")
+        
+        logger.info(f"Found {len(structural_relations)} structural relations")
+        return structural_relations[:query_param.max_neighbors]  # Limit results
+        
+    except Exception as e:
+        logger.error(f"Error finding structural relations: {e}")
+        return []
+
+
+def _compute_fastrp_similarity(target_entity: str, seed_entities: list[str], node_embedding) -> float:
+    """Compute FastRP similarity between target entity and seed entities."""
+    try:
+        if not hasattr(node_embedding, 'fastrp_embeddings') or not node_embedding.fastrp_embeddings:
+            return 0.0
+            
+        target_embedding = node_embedding.fastrp_embeddings.get(target_entity)
+        if target_embedding is None:
+            return 0.0
+            
+        similarities = []
+        for seed_entity in seed_entities:
+            seed_embedding = node_embedding.fastrp_embeddings.get(seed_entity)
+            if seed_embedding is not None:
+                # Compute cosine similarity
+                import numpy as np
+                target_vec = np.array(target_embedding)
+                seed_vec = np.array(seed_embedding)
+                
+                # Normalize vectors
+                target_norm = np.linalg.norm(target_vec)
+                seed_norm = np.linalg.norm(seed_vec)
+                
+                if target_norm > 0 and seed_norm > 0:
+                    similarity = np.dot(target_vec, seed_vec) / (target_norm * seed_norm)
+                    similarities.append(similarity)
+                    
+        # Return average similarity to all seed entities
+        return sum(similarities) / len(similarities) if similarities else 0.0
+        
+    except Exception as e:
+        logger.debug(f"Error computing FastRP similarity: {e}")
+        return 0.0
+
+
+async def _find_relations_for_entities(
+    entities: list[dict], 
+    relationships_vdb: BaseVectorStorage
+) -> list[dict]:
+    """Find relations connecting given entities."""
+    if not entities:
+        return []
+    
+    try:
+        entity_names = [e.get("entity_name", "") for e in entities]
+        relations = []
+        
+        for entity_name in entity_names:
+            try:
+                # Search for relations involving this entity
+                relation_results = await relationships_vdb.query(entity_name, top_k=10)
+                
+                for relation_data in relation_results:
+                    src_id = relation_data.get("src_id", "")
+                    tgt_id = relation_data.get("tgt_id", "")
+                    
+                    # Keep relations that connect our entities
+                    if (src_id in entity_names and tgt_id in entity_names):
+                        relation_info = {
+                            "src_id": src_id,
+                            "tgt_id": tgt_id,
+                            "description": relation_data.get("description", ""),
+                            "keywords": relation_data.get("keywords", ""),
+                            "discovery_method": "entity_relation",
+                            "rank": relation_data.get("rank", 0),
+                            **relation_data
+                        }
+                        
+                        # Avoid duplicates
+                        if not any(
+                            r["src_id"] == src_id and r["tgt_id"] == tgt_id 
+                            for r in relations
+                        ):
+                            relations.append(relation_info)
+                            
+            except Exception as e:
+                logger.debug(f"Error finding relations for {entity_name}: {e}")
+        
+        logger.debug(f"Found {len(relations)} relations for {len(entity_names)} entities")
+        return relations
+        
+    except Exception as e:
+        logger.error(f"Error finding relations for entities: {e}")
+        return []
+
+
+def _merge_three_way_entities(
+    multihop_entities: list[dict],
+    ppr_entities: list[dict], 
+    fastrp_entities: list[dict]
+) -> list[dict]:
+    """Merge and deduplicate entities from three sources with discovery method tracking."""
+    
+    seen_entities = set()
+    merged = []
+    
+    # Track discovery methods for each entity
+    entity_methods = {}
+    
+    # Add multi-hop entities first (they have higher priority as they're contextually relevant)
+    for entity in multihop_entities:
+        entity_name = entity.get("entity_name", "")
+        if entity_name and entity_name not in seen_entities:
+            entity_copy = dict(entity)
+            entity_copy["discovery_method"] = "multihop"
+            entity_methods[entity_name] = ["multihop"]
+            merged.append(entity_copy)
+            seen_entities.add(entity_name)
+    
+    # Add PPR entities that aren't already included
+    for entity in ppr_entities:
+        entity_name = entity.get("entity_name", "")
+        if entity_name and entity_name not in seen_entities:
+            entity_copy = dict(entity)
+            entity_copy["discovery_method"] = "ppr"
+            entity_methods[entity_name] = ["ppr"]
+            merged.append(entity_copy)
+            seen_entities.add(entity_name)
+        elif entity_name in entity_methods:
+            # Entity found by multiple methods, update discovery method
+            entity_methods[entity_name].append("ppr")
+    
+    # Add FastRP entities that aren't already included
+    for entity in fastrp_entities:
+        entity_name = entity.get("entity_name", "")
+        if entity_name and entity_name not in seen_entities:
+            entity_copy = dict(entity)
+            entity_copy["discovery_method"] = "fastrp"
+            entity_methods[entity_name] = ["fastrp"]
+            merged.append(entity_copy)
+            seen_entities.add(entity_name)
+        elif entity_name in entity_methods:
+            # Entity found by multiple methods, update discovery method
+            entity_methods[entity_name].append("fastrp")
+    
+    # Update discovery method for entities found by multiple sources
+    for entity in merged:
+        entity_name = entity.get("entity_name", "")
+        if entity_name in entity_methods and len(entity_methods[entity_name]) > 1:
+            methods = "+".join(sorted(entity_methods[entity_name]))
+            entity["discovery_method"] = methods
+    
+    logger.info(f"Three-way entity merge: multihop={len(multihop_entities)}, ppr={len(ppr_entities)}, fastrp={len(fastrp_entities)} -> total={len(merged)}")
+    
+    return merged
+
+
+def _merge_three_way_relations(
+    multihop_relations: list[dict],
+    ppr_relations: list[dict], 
+    fastrp_relations: list[dict]
+) -> list[dict]:
+    """Merge and deduplicate relations from three sources."""
+    
+    seen_relations = set()
+    merged = []
+    
+    # Create unique keys for relations (src_id + tgt_id)
+    def relation_key(rel):
+        src_id = rel.get("src_id", "")
+        tgt_id = rel.get("tgt_id", "")
+        return f"{src_id}|{tgt_id}"
+    
+    # Add all relations with deduplication
+    all_relations = multihop_relations + ppr_relations + fastrp_relations
+    
+    for relation in all_relations:
+        key = relation_key(relation)
+        if key not in seen_relations:
+            merged.append(relation)
+            seen_relations.add(key)
+    
+    logger.info(f"Three-way relation merge: multihop={len(multihop_relations)}, ppr={len(ppr_relations)}, fastrp={len(fastrp_relations)} -> total={len(merged)}")
+    
+    return merged
+
+
+def _merge_and_deduplicate_entities(
+    semantic_entities: list[dict], 
+    structural_entities: list[dict], 
+    max_total: int
+) -> list[dict]:
+    """Merge and deduplicate entities from semantic and structural paths."""
+    
+    # Use entity_name as the deduplication key
+    seen_entities = set()
+    merged = []
+    
+    # First, add semantic entities (preserve semantic priority)
+    for entity in semantic_entities:
+        entity_name = entity.get("entity_name", "")
+        if entity_name and entity_name not in seen_entities:
+            entity_copy = dict(entity)
+            entity_copy["discovery_method"] = "semantic"
+            merged.append(entity_copy)
+            seen_entities.add(entity_name)
+    
+    # Then, add structural entities that aren't already included
+    for entity in structural_entities:
+        entity_name = entity.get("entity_name", "")
+        if entity_name and entity_name not in seen_entities:
+            merged.append(entity)  # Already has discovery_method = "structural"
+            seen_entities.add(entity_name)
+    
+    # Limit to max_total, preferring diversity
+    if len(merged) > max_total:
+        # Sort by discovery method diversity and relevance
+        semantic_count = sum(1 for e in merged if e.get("discovery_method") == "semantic")
+        structural_count = len(merged) - semantic_count
+        
+        # Keep a balanced mix if possible
+        target_semantic = min(semantic_count, max_total // 2)
+        target_structural = max_total - target_semantic
+        
+        final_entities = []
+        semantic_added = structural_added = 0
+        
+        for entity in merged:
+            if len(final_entities) >= max_total:
+                break
+                
+            if entity.get("discovery_method") == "semantic" and semantic_added < target_semantic:
+                final_entities.append(entity)
+                semantic_added += 1
+            elif entity.get("discovery_method") == "structural" and structural_added < target_structural:
+                final_entities.append(entity) 
+                structural_added += 1
+        
+        # Fill remaining slots with any remaining entities
+        remaining_slots = max_total - len(final_entities)
+        for entity in merged:
+            if len(final_entities) >= max_total:
+                break
+            if entity not in final_entities:
+                final_entities.append(entity)
+                remaining_slots -= 1
+                if remaining_slots <= 0:
+                    break
+                    
+        merged = final_entities
+    
+    return merged
+
+
+def _merge_and_deduplicate_relations(
+    semantic_relations: list[dict], 
+    structural_relations: list[dict]
+) -> list[dict]:
+    """Merge and deduplicate relations from both paths."""
+    
+    seen_relations = set()
+    merged = []
+    
+    # Create unique keys for relations (src_id + tgt_id + relation_type)
+    def relation_key(rel):
+        src_id = rel.get("src_id", "")
+        tgt_id = rel.get("tgt_id", "")
+        rel_type = rel.get("keywords", "")
+        return f"{src_id}|{tgt_id}|{rel_type}"
+    
+    # Add semantic relations first
+    for relation in semantic_relations:
+        key = relation_key(relation)
+        if key not in seen_relations:
+            relation_copy = dict(relation)
+            relation_copy["discovery_method"] = "semantic"
+            merged.append(relation_copy)
+            seen_relations.add(key)
+    
+    # Add unique structural relations
+    for relation in structural_relations:
+        key = relation_key(relation)
+        if key not in seen_relations:
+            relation_copy = dict(relation)
+            relation_copy["discovery_method"] = "structural"
+            merged.append(relation_copy)
+            seen_relations.add(key)
+    
+    return merged
+
+
+async def _original_multi_hop_expand(
+    seed_nodes: list[dict],
+    ll_keywords: str,
+    hl_keywords: str,
+    query_param: QueryParam,
+    knowledge_graph_inst: BaseGraphStorage,
+    entities_vdb: BaseVectorStorage,
+    relationships_vdb: BaseVectorStorage,
+) -> tuple[list[dict], list[dict]]:
+    """Original multi-hop expansion logic (semantic path only)."""
     
     logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, max_neighbors={query_param.max_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
     
@@ -2721,6 +3474,7 @@ async def _build_query_context(
     relationships_vdb: BaseVectorStorage,
     text_chunks_db: BaseKVStorage,
     query_param: QueryParam,
+    global_config: dict[str, str],
     chunks_vdb: BaseVectorStorage = None,
 ):
     if not query:
@@ -2770,6 +3524,7 @@ async def _build_query_context(
             knowledge_graph_inst,
             entities_vdb,
             query_param,
+            global_config,
         )
 
     elif query_param.mode == "global" and len(hl_keywords) > 0:
@@ -2787,6 +3542,7 @@ async def _build_query_context(
                 knowledge_graph_inst,
                 entities_vdb,
                 query_param,
+                global_config,
             )
         if len(hl_keywords) > 0:
             global_relations, global_entities = await _get_edge_data(
@@ -3268,6 +4024,7 @@ async def _build_query_context(
             entities_vdb=entities_vdb,
             relationships_vdb=relationships_vdb,
             query_param=query_param,
+            global_config=global_config,
         )
         
         # Merge expanded results with existing context using round-robin
@@ -3427,7 +4184,8 @@ async def _build_query_context(
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
 
-        # Re-assign IDs after merging expanded data (maintain round-robin order)
+
+        # Re-assign IDs after merging expanded data and potential enhancement
         for i, entity in enumerate(entities_context):
             entity["id"] = i + 1
         for i, relation in enumerate(relations_context):
@@ -3472,12 +4230,14 @@ async def _get_node_data(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     query_param: QueryParam,
+    global_config: dict[str, str] = None,
 ):
     # get similar entities
     logger.info(
         f"Query nodes: {query}, top_k: {query_param.top_k}, cosine: {entities_vdb.cosine_better_than_threshold}"
     )
 
+    # Always use regular text embeddings for initial entity retrieval
     results = await entities_vdb.query(query, top_k=query_param.top_k)
 
     if not len(results):

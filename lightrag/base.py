@@ -167,6 +167,13 @@ class QueryParam:
 
     multi_hop_relevance_threshold: float = 0.3
     """Relevance threshold for multi-hop retrieval. Neighbors with scores below this threshold will be filtered out."""
+    
+    top_ppr_nodes: int = 50
+    """Number of top PageRank nodes to consider as candidates for structural analysis."""
+    
+    top_fastrp_nodes: int = 0
+    """Number of top FastRP similarity nodes to select for final structural analysis.
+    If 0, disables FastRP + PageRank enhanced retrieval entirely."""
 
 
 @dataclass

@@ -346,6 +346,9 @@ class LightRAG:
     enable_llm_cache_for_entity_extract: bool = field(default=True)
     """If True, enables caching for entity extraction steps to reduce LLM costs."""
 
+    enable_node_embedding: bool = field(default=False)
+    """If True, enables FastRP + Personalized PageRank enhanced embeddings during insertion and retrieval."""
+
     # Extensions
     # ---
 
@@ -414,6 +417,18 @@ class LightRAG:
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
             os.makedirs(self.working_dir)
+
+        # Initialize node embedding enhancer if enabled
+        self.node_embedding = None
+        if self.enable_node_embedding:
+            try:
+                from lightrag.gnn.node_embedding import NodeEmbeddingEnhancer, NodeEmbeddingConfig
+                config = NodeEmbeddingConfig()
+                self.node_embedding = NodeEmbeddingEnhancer(config, working_dir=self.working_dir)
+                logger.info("Node embedding initialized")
+            except ImportError as e:
+                logger.warning(f"Node embedding could not be initialized: {e}. Install scikit-learn with: pip install scikit-learn")
+                self.enable_node_embedding = False
 
         # Verify storage implementation compatibility and environment variables
         storage_configs = [
@@ -1671,12 +1686,17 @@ class LightRAG:
                             try:
                                 # Get chunk_results from entity_relation_task
                                 chunk_results = await entity_relation_task
+                                # Prepare global config with node embedding enhancer
+                                global_config = asdict(self)
+                                if self.enable_node_embedding and hasattr(self, 'node_embedding'):
+                                    global_config["node_embedding"] = self.node_embedding
+                                
                                 await merge_nodes_and_edges(
                                     chunk_results=chunk_results,  # result collected from entity_relation_task
                                     knowledge_graph_inst=self.chunk_entity_relation_graph,
                                     entity_vdb=self.entities_vdb,
                                     relationships_vdb=self.relationships_vdb,
-                                    global_config=asdict(self),
+                                    global_config=global_config,
                                     full_entities_storage=self.full_entities,
                                     full_relations_storage=self.full_relations,
                                     doc_id=doc_id,
@@ -2092,6 +2112,8 @@ class LightRAG:
         """
         # If a custom model is provided in param, temporarily update global config
         global_config = asdict(self)
+        if self.enable_node_embedding and hasattr(self, 'node_embedding'):
+            global_config["node_embedding"] = self.node_embedding
 
         if param.mode in ["local", "global", "hybrid", "mix"]:
             response = await kg_query(
@@ -3137,7 +3159,7 @@ class LightRAG:
                             'description': description,
                         })
                         entity_embeddings.append(vector_array.tolist())
-                        print(f"    - ✅ Added to entities list (vector dim: {len(vector_array)})")
+                        # print(f"    - ✅ Added to entities list (vector dim: {len(vector_array)})")
                     else:
                         print(f"    - ❌ Empty vector after processing")
                 except Exception as e:

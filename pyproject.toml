@@ -41,6 +41,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gnn = [
+    "scikit-learn>=1.3.0",
+]
 api = [
     # Core dependencies
     "aiohttp",
