@@ -106,6 +106,7 @@ async def main():
         param=QueryParam(
             mode="hybrid", 
             max_hop=2,              # Multi-hop traversal depth
+            max_neighbors=30,       # Max neighbor per node
             top_ppr_nodes=5,        # Top PageRank entities
             top_fastrp_nodes=5      # Top FastRP structural entities
         )
