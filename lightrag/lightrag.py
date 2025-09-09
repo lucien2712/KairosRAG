@@ -2153,7 +2153,7 @@ class LightRAG:
         else:
             raise ValueError(f"Unknown mode {param.mode}")
         await self._query_done()
-        return response
+        return response #, context
 
     async def _query_done(self):
         await self.llm_response_cache.index_done_callback()
@@ -3025,14 +3025,14 @@ class LightRAG:
         from .utils import cosine_similarity
         
         start_time = time_module.time()
-        print(f"🚀 Starting agentic entity merging with threshold={threshold}")
+        print(f"Starting agentic entity merging with threshold={threshold}")
         
         # Initialize LLM (you may need to adjust this based on your setup)
         llm = ChatOpenAI(
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             api_key=os.getenv("OPENAI_API_KEY"),
         )
-        print(f"✅ LLM initialized: {os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
+        print(f"LLM initialized: {os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
         
         # Define the merge tool for LLM
         @tool
@@ -3060,12 +3060,12 @@ class LightRAG:
         llm_with_tools = llm.bind_tools([merge_entities_tool])
         
         # Step 1: Get all entities from graph storage and their vectors from entities_vdb
-        print("📊 Loading entities from graph storage...")
+        print("Loading entities from graph storage...")
         all_nodes = await self.chunk_entity_relation_graph.get_all_nodes()
-        print(f"✅ Found {len(all_nodes)} nodes in graph storage")
+        print(f"Found {len(all_nodes)} nodes in graph storage")
         
         if not all_nodes:
-            print("❌ No entities found in graph storage")
+            print("No entities found in graph storage")
             return {
                 "total_entities": 0,
                 "candidate_pairs": 0,
@@ -3089,13 +3089,13 @@ class LightRAG:
                 entity_id_to_node[entity_id] = node
         
         # Access vector data directly from the storage client to get the vector field
-        print(f"🔍 Batch loading vectors for {len(entity_vdb_ids)} entities...")
+        print(f"Batch loading vectors for {len(entity_vdb_ids)} entities...")
         entities_vdb_data = {}
         if entity_vdb_ids:
             # Access the internal client to get raw data including vectors
             client = await self.entities_vdb._get_client()
             vdb_results = client.get(entity_vdb_ids)
-            print(f"✅ Retrieved {len(vdb_results)} vector results")
+            print(f"Retrieved {len(vdb_results)} vector results")
             
             # Process results - create mapping from entity_id to vector data
             for vdb_data in vdb_results:
@@ -3105,10 +3105,10 @@ class LightRAG:
                     entity_name = content.split('\n')[0] if '\n' in content else content
                     entities_vdb_data[entity_name] = vdb_data
         
-        print(f"✅ Successfully loaded vectors for {len(entities_vdb_data)} entities")
+        print(f"Successfully loaded vectors for {len(entities_vdb_data)} entities")
         
         if not entities_vdb_data:
-            print("❌ No vector data found for entities")
+            print("No vector data found for entities")
             return {
                 "total_entities": 0,
                 "candidate_pairs": 0,
@@ -3120,18 +3120,18 @@ class LightRAG:
             }
         
         # Step 2: Extract entity information and embeddings
-        print(f"🔍 Extracting entity information and embeddings...")
+        print(f"Extracting entity information and embeddings...")
         entities = []
         entity_embeddings = []
         
         # Debug: Check what we have in entities_vdb_data
-        print(f"🔍 Sample entity data keys: {list(entities_vdb_data.keys())[:5] if entities_vdb_data else 'None'}")
+        print(f"Sample entity data keys: {list(entities_vdb_data.keys())[:5] if entities_vdb_data else 'None'}")
         if entities_vdb_data:
             sample_entity = next(iter(entities_vdb_data.values()))
-            print(f"🔍 Sample entity data structure: {list(sample_entity.keys()) if sample_entity else 'None'}")
+            print(f"Sample entity data structure: {list(sample_entity.keys()) if sample_entity else 'None'}")
         
         for entity_name, entity_data in entities_vdb_data.items():
-            # print(f"🔍 Processing entity: {entity_name}")
+            # print(f"Processing entity: {entity_name}")
             # print(f"    - Has content: {'content' in entity_data}")
             # print(f"    - Has vector: {'vector' in entity_data}")
             
@@ -3159,15 +3159,15 @@ class LightRAG:
                             'description': description,
                         })
                         entity_embeddings.append(vector_array.tolist())
-                        # print(f"    - ✅ Added to entities list (vector dim: {len(vector_array)})")
+                        # print(f"    - Added to entities list (vector dim: {len(vector_array)})")
                     else:
-                        print(f"    - ❌ Empty vector after processing")
+                        print(f"    - Empty vector after processing")
                 except Exception as e:
-                    print(f"    - ❌ Error decoding vector: {e}")
+                    print(f"    - Error decoding vector: {e}")
             else:
-                print(f"    - ❌ Missing required fields")
+                print(f"    - Missing required fields")
         
-        print(f"✅ Successfully extracted {len(entities)} entities with embeddings")
+        print(f"Successfully extracted {len(entities)} entities with embeddings")
         
         total_entities = len(entities)
         if total_entities < 2:
@@ -3182,10 +3182,10 @@ class LightRAG:
             }
         
         # Step 3: Calculate similarity matrix using numpy (efficient!)
-        print(f"🧮 Calculating similarity matrix for {len(entities)} entities...")
+        print(f"Calculating similarity matrix for {len(entities)} entities...")
         
         if not entity_embeddings:
-            print("❌ No valid embeddings found")
+            print("No valid embeddings found")
             return {
                 "total_entities": len(all_nodes),
                 "candidate_pairs": 0,
@@ -3201,7 +3201,7 @@ class LightRAG:
         max_dim = max(vector_dimensions)
         min_dim = min(vector_dimensions)
         
-        # print(f"🔍 Vector dimensions - Min: {min_dim}, Max: {max_dim}")
+        # print(f"Vector dimensions - Min: {min_dim}, Max: {max_dim}")
         
         # Pad shorter vectors with zeros to match the longest
         standardized_embeddings = []
@@ -3214,7 +3214,7 @@ class LightRAG:
         
         try:
             embeddings = np.array(standardized_embeddings, dtype=np.float32)
-            # print(f"✅ Created embeddings array: {embeddings.shape}")
+            # print(f"Created embeddings array: {embeddings.shape}")
             
             # Normalize vectors for cosine similarity
             norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
@@ -3224,9 +3224,9 @@ class LightRAG:
             
             # Calculate similarity matrix
             similarity_matrix = np.dot(embeddings, embeddings.T)
-            # print(f"✅ Similarity matrix calculated: {similarity_matrix.shape}")
+            # print(f"Similarity matrix calculated: {similarity_matrix.shape}")
         except Exception as e:
-            print(f"❌ Error creating similarity matrix: {e}")
+            print(f"Error creating similarity matrix: {e}")
             return {
                 "total_entities": len(all_nodes),
                 "candidate_pairs": 0,
@@ -3239,7 +3239,7 @@ class LightRAG:
             }
         
         # Step 4: Find candidate pairs above threshold
-        print(f"🔍 Filtering candidate pairs with similarity >= {threshold}...")
+        print(f"Filtering candidate pairs with similarity >= {threshold}...")
         candidate_pairs = []
         for i in range(len(entities)):
             for j in range(i + 1, len(entities)):
@@ -3247,10 +3247,10 @@ class LightRAG:
                 if similarity >= threshold:
                     candidate_pairs.append((i, j, float(similarity)))
         
-        print(f"✅ Found {len(candidate_pairs)} candidate pairs for LLM evaluation")
+        print(f"Found {len(candidate_pairs)} candidate pairs for LLM evaluation")
         
         # Step 5: LLM decision making for candidate pairs
-        print(f"🤖 Starting LLM evaluation of candidate pairs...")
+        print(f"Starting LLM evaluation of candidate pairs...")
         merged_pairs = 0
         llm_evaluated_pairs = 0
         active_entities = set(range(len(entities)))  # Track which entities are still active
@@ -3299,21 +3299,6 @@ class LightRAG:
         
         processing_time = time_module.time() - start_time
         remaining_entities = len(active_entities)
-        
-        # Print final statistics
-        print("\n" + "="*50)
-        print("🎉 Agentic Entity Merging Complete!")
-        print("="*50)
-        print(f"📊 Total entities: {total_entities}")
-        print(f"🔍 Candidate pairs (similarity >= {threshold}): {len(candidate_pairs)}")
-        print(f"🤖 LLM evaluated pairs: {llm_evaluated_pairs}")
-        print(f"✅ Successfully merged pairs: {merged_pairs}")
-        print(f"📊 Remaining entities after merging: {remaining_entities}")
-        print(f"⏱️ Processing time: {processing_time:.2f}s")
-        if len(candidate_pairs) > 0:
-            efficiency = (len(candidate_pairs) - llm_evaluated_pairs) / len(candidate_pairs) * 100
-            print(f"⚡ Efficiency gain: {efficiency:.1f}% (avoided {len(candidate_pairs) - llm_evaluated_pairs} unnecessary LLM calls)")
-        print("="*50)
         
         return {
             "total_entities": total_entities,

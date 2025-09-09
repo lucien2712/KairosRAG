@@ -362,7 +362,7 @@ async def _handle_single_entity_extraction(
 
         # Automatically prepend timestamp to description if provided and not already present
         if timestamp.strip() and not entity_description.startswith(timestamp):
-            entity_description = f"The following content is from Fiscal Year {timestamp}: {entity_description}"
+            entity_description = f"{timestamp}: {entity_description}"
 
         return dict(
             entity_name=entity_name,
@@ -436,7 +436,7 @@ async def _handle_single_relationship_extraction(
 
         # Automatically prepend timestamp to description if provided and not already present
         if timestamp.strip() and not edge_description.startswith(timestamp):
-            edge_description = f"The following content is from Fiscal Year {timestamp}: {edge_description}"
+            edge_description = f"{timestamp}: {edge_description}"
 
         edge_source_id = chunk_key
         weight = (
@@ -2145,7 +2145,7 @@ async def kg_query(
             ),
         )
 
-    return response
+    return response #,context
 
 
 # Multi-hop retrieval functions
@@ -3947,7 +3947,7 @@ async def _build_query_context(
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "The content is from Fiscal Year": chunk.get("timestamp", ""),
+                    "The content is from": chunk.get("timestamp", ""),
                 }
             )
 
@@ -4179,7 +4179,7 @@ async def _build_query_context(
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "The content is from Fiscal Year": chunk.get("timestamp", ""),
+                    "The content is from": chunk.get("timestamp", ""),
                 })
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
@@ -4914,7 +4914,7 @@ async def naive_query(
                 "id": i + 1,
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
-                "The content is from Fiscal Year": chunk.get("timestamp", ""),
+                "The content is from": chunk.get("timestamp", ""),
             }
         )
 
