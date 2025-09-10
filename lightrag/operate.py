@@ -3125,9 +3125,9 @@ async def _original_multi_hop_expand(
         
         # Get neighbors for current nodes
         node_names = [node["entity_name"] for node in current_nodes]
-        logger.info(f"Multi-hop: Fetching edges for {len(node_names)} nodes")
+        # logger.info(f"Multi-hop: Fetching edges for {len(node_names)} nodes")
         batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
-        logger.info(f"Multi-hop: Retrieved edges dict with {len(batch_edges_dict)} entries")
+        # logger.info(f"Multi-hop: Retrieved edges dict with {len(batch_edges_dict)} entries")
         
         # Collect all neighboring nodes and edges
         neighbor_candidates = []
