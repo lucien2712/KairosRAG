@@ -3797,189 +3797,25 @@ async def _build_query_context(
             query_embedding=query_embedding,
         )
 
-    # Round-robin merge chunks from different sources with deduplication by chunk_id
-    merged_chunks = []
-    seen_chunk_ids = set()
-    max_len = max(len(vector_chunks), len(entity_chunks), len(relation_chunks))
+    # Store initial chunks for later processing (after multi-hop expansion)
+    # Collect all chunks without merging or truncation
+    initial_chunks = {
+        "vector_chunks": vector_chunks,
+        "entity_chunks": entity_chunks,
+        "relation_chunks": relation_chunks,
+    }
+    
     origin_len = len(vector_chunks) + len(entity_chunks) + len(relation_chunks)
-
-    for i in range(max_len):
-        # Add from vector chunks first (Naive mode)
-        if i < len(vector_chunks):
-            chunk = vector_chunks[i]
-            chunk_id = chunk.get("chunk_id") or chunk.get("id")
-            if chunk_id and chunk_id not in seen_chunk_ids:
-                seen_chunk_ids.add(chunk_id)
-                merged_chunks.append(
-                    {
-                        "content": chunk["content"],
-                        "file_path": chunk.get("file_path", "unknown_source"),
-                        "chunk_id": chunk_id,
-                    }
-                )
-
-        # Add from entity chunks (Local mode)
-        if i < len(entity_chunks):
-            chunk = entity_chunks[i]
-            chunk_id = chunk.get("chunk_id") or chunk.get("id")
-            if chunk_id and chunk_id not in seen_chunk_ids:
-                seen_chunk_ids.add(chunk_id)
-                merged_chunks.append(
-                    {
-                        "content": chunk["content"],
-                        "file_path": chunk.get("file_path", "unknown_source"),
-                        "chunk_id": chunk_id,
-                    }
-                )
-
-        # Add from relation chunks (Global mode)
-        if i < len(relation_chunks):
-            chunk = relation_chunks[i]
-            chunk_id = chunk.get("chunk_id") or chunk.get("id")
-            if chunk_id and chunk_id not in seen_chunk_ids:
-                seen_chunk_ids.add(chunk_id)
-                merged_chunks.append(
-                    {
-                        "content": chunk["content"],
-                        "file_path": chunk.get("file_path", "unknown_source"),
-                        "chunk_id": chunk_id,
-                    }
-                )
-
-    logger.info(
-        f"Round-robin merged total chunks from {origin_len} to {len(merged_chunks)}"
-    )
-
-    # Apply token processing to merged chunks
+    logger.info(f"Collected initial chunks: {origin_len} total (Vector: {len(vector_chunks)}, Entity: {len(entity_chunks)}, Relation: {len(relation_chunks)})")
+    
+    # Create temporary empty text_units_context for multi-hop expansion
     text_units_context = []
-    truncated_chunks = []
-    if merged_chunks:
-        # Calculate dynamic token limit for text chunks
-        entities_str = json.dumps(entities_context, ensure_ascii=False)
-        relations_str = json.dumps(relations_context, ensure_ascii=False)
-
-        # Calculate base context tokens (entities + relations + template)
-        kg_context_template = """-----Entities(KG)-----
-
-```json
-{entities_str}
-```
-
------Relationships(KG)-----
-
-```json
-{relations_str}
-```
-
------Document Chunks(DC)-----
-
-```json
-[]
-```
-
-"""
-        kg_context = kg_context_template.format(
-            entities_str=entities_str, relations_str=relations_str
-        )
-        kg_context_tokens = len(tokenizer.encode(kg_context))
-
-        # Calculate actual system prompt overhead dynamically
-        # 1. Converstion history not included in context length calculation
-        history_context = ""
-        # if query_param.conversation_history:
-        #     history_context = get_conversation_turns(
-        #         query_param.conversation_history, query_param.history_turns
-        #     )
-        # history_tokens = (
-        #     len(tokenizer.encode(history_context)) if history_context else 0
-        # )
-
-        # 2. Calculate system prompt template tokens (excluding context_data)
-        user_prompt = query_param.user_prompt if query_param.user_prompt else ""
-        response_type = (
-            query_param.response_type
-            if query_param.response_type
-            else "Multiple Paragraphs"
-        )
-
-        # Get the system prompt template from PROMPTS
-        sys_prompt_template = text_chunks_db.global_config.get(
-            "system_prompt_template", PROMPTS["rag_response"]
-        )
-
-        # Create a sample system prompt with placeholders filled (excluding context_data)
-        sample_sys_prompt = sys_prompt_template.format(
-            history=history_context,
-            context_data="",  # Empty for overhead calculation
-            response_type=response_type,
-            user_prompt=user_prompt,
-        )
-        sys_prompt_template_tokens = len(tokenizer.encode(sample_sys_prompt))
-
-        # Total system prompt overhead = template + query tokens
-        query_tokens = len(tokenizer.encode(query))
-        sys_prompt_overhead = sys_prompt_template_tokens + query_tokens
-
-        buffer_tokens = 100  # Safety buffer as requested
-
-        # Calculate available tokens for text chunks
-        used_tokens = kg_context_tokens + sys_prompt_overhead + buffer_tokens
-        available_chunk_tokens = max_total_tokens - used_tokens
-
-        logger.debug(
-            f"Token allocation - Total: {max_total_tokens}, SysPrompt: {sys_prompt_overhead}, KG: {kg_context_tokens}, Buffer: {buffer_tokens}, Available for chunks: {available_chunk_tokens}"
-        )
-
-        # Apply token truncation to chunks using the dynamic limit
-        truncated_chunks = await process_chunks_unified(
-            query=query,
-            unique_chunks=merged_chunks,
-            query_param=query_param,
-            global_config=text_chunks_db.global_config,
-            source_type=query_param.mode,
-            chunk_token_limit=available_chunk_tokens,  # Pass dynamic limit
-        )
-
-        # Rebuild text_units_context with truncated chunks
-        for i, chunk in enumerate(truncated_chunks):
-            text_units_context.append(
-                {
-                    "id": i + 1,
-                    "content": chunk["content"],
-                    "file_path": chunk.get("file_path", "unknown_source"),
-                    "The content is from": chunk.get("timestamp", ""),
-                }
-            )
-
-        logger.debug(
-            f"Final chunk processing: {len(merged_chunks)} -> {len(text_units_context)} (chunk available tokens: {available_chunk_tokens})"
-        )
-
-    logger.info(
-        f"Final context: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks"
-    )
 
     # not necessary to use LLM to generate a response
     if not entities_context and not relations_context:
         return None
 
-    # output chunks tracking infomations
-    # format: <source><frequency>/<order> (e.g., E5/2 R2/1 C1/1)
-    if truncated_chunks and chunk_tracking:
-        chunk_tracking_log = []
-        for chunk in truncated_chunks:
-            chunk_id = chunk.get("chunk_id")
-            if chunk_id and chunk_id in chunk_tracking:
-                tracking_info = chunk_tracking[chunk_id]
-                source = tracking_info["source"]
-                frequency = tracking_info["frequency"]
-                order = tracking_info["order"]
-                chunk_tracking_log.append(f"{source}{frequency}/{order}")
-            else:
-                chunk_tracking_log.append("?0/0")
-
-        if chunk_tracking_log:
-            logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
+    # Chunk tracking will be handled after expansion when chunks are finally processed
 
     # Keep original round-robin ordering logic for fair data balance
 
@@ -4011,6 +3847,39 @@ async def _build_query_context(
     if query_param.max_hop > 0 and (entities_context or relations_context):
         logger.info(f"Performing multi-hop expansion with max_hop={query_param.max_hop}")
         logger.info(f"Initial entities: {len(entities_context)}, relations: {len(relations_context)}")
+        
+        # Collect initial chunks for expansion processing with source labels
+        merged_chunks = []
+        
+        # Add vector chunks with source label
+        for chunk in initial_chunks["vector_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "vector",
+            })
+        
+        # Add entity chunks with source label
+        for chunk in initial_chunks["entity_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "entity",
+            })
+        
+        # Add relation chunks with source label
+        for chunk in initial_chunks["relation_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "relation",
+            })
         
         # Collect seed nodes for multi-hop expansion
         seed_nodes = final_entities.copy()
@@ -4183,9 +4052,375 @@ async def _build_query_context(
                 })
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
+        
+        # Now apply comprehensive chunk processing with round-robin merge, sorting and truncation
+        # logger.info("Processing all chunks after expansion with round-robin merge and truncation")
+        
+        # Separate chunks by source for round-robin merge
+        # IMPORTANT: Preserve the original ordering within each source type
+        # The original chunks were already sorted by their respective methods:
+        # - vector_chunks: sorted by vector similarity
+        # - entity_chunks: sorted by WEIGHT or VECTOR similarity  
+        # - relation_chunks: sorted by WEIGHT or VECTOR similarity
+        # - expanded_chunks: maintain discovery order
+        expansion_vector_chunks = []
+        expansion_entity_chunks = []
+        expansion_relation_chunks = []
+        expansion_expanded_chunks = []
+        
+        for chunk in merged_chunks:
+            source = chunk.get("source", "")
+            if source == "vector":
+                expansion_vector_chunks.append(chunk)
+            elif source == "entity":
+                expansion_entity_chunks.append(chunk)
+            elif source == "relation":  
+                expansion_relation_chunks.append(chunk)
+            elif source == "expanded":
+                expansion_expanded_chunks.append(chunk)
+            elif not source:  # Fallback for chunks without explicit source
+                expansion_vector_chunks.append(chunk)
+        
+        # Apply round-robin merge with deduplication
+        final_merged_chunks = []
+        seen_chunk_ids = set()
+        max_len = max(len(expansion_vector_chunks), len(expansion_entity_chunks), 
+                     len(expansion_relation_chunks), len(expansion_expanded_chunks)) if any([
+                     expansion_vector_chunks, expansion_entity_chunks, 
+                     expansion_relation_chunks, expansion_expanded_chunks]) else 0
+        
+        for i in range(max_len):
+            # Add from each source in round-robin fashion
+            for chunk_list in [expansion_vector_chunks, expansion_entity_chunks, 
+                              expansion_relation_chunks, expansion_expanded_chunks]:
+                if i < len(chunk_list):
+                    chunk = chunk_list[i]
+                    chunk_id = chunk.get("chunk_id", "")
+                    if chunk_id and chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        final_merged_chunks.append({
+                            "content": chunk["content"],
+                            "file_path": chunk.get("file_path", "unknown_source"),
+                            "chunk_id": chunk_id,
+                            "timestamp": chunk.get("timestamp", ""),
+                        })
+        
+        total_chunks_before = len(merged_chunks)
+        # logger.info(f"Round-robin merged total chunks from {total_chunks_before} to {len(final_merged_chunks)}")
+        
+        # Apply chunk_top_k truncation if specified
+        if query_param.chunk_top_k and len(final_merged_chunks) > query_param.chunk_top_k:
+            final_merged_chunks = final_merged_chunks[:query_param.chunk_top_k]
+            # logger.info(f"Truncated chunks to chunk_top_k={query_param.chunk_top_k}: {len(final_merged_chunks)} chunks")
+        
+        # Apply token processing to final merged chunks
+        tokenizer = text_chunks_db.global_config.get("tokenizer")
+        if final_merged_chunks and tokenizer:
+            # Calculate dynamic token limit for text chunks
+            entities_str = json.dumps(entities_context, ensure_ascii=False)
+            relations_str = json.dumps(relations_context, ensure_ascii=False)
+            
+            # Calculate base context tokens (entities + relations + template)
+            kg_context_template = """-----Entities(KG)-----
 
+```json
+{entities_str}
+```
 
-        # Re-assign IDs after merging expanded data and potential enhancement
+-----Relationships(KG)-----
+
+```json
+{relations_str}
+```
+
+-----Document Chunks(DC)-----
+
+```json
+[]
+```
+
+"""
+            kg_context = kg_context_template.format(
+                entities_str=entities_str, relations_str=relations_str
+            )
+            kg_context_tokens = len(tokenizer.encode(kg_context))
+            
+            # Calculate system prompt overhead
+            user_prompt = query_param.user_prompt if query_param.user_prompt else ""
+            response_type = (
+                query_param.response_type
+                if query_param.response_type
+                else "Multiple Paragraphs"
+            )
+            
+            # Get the system prompt template from PROMPTS
+            sys_prompt_template = text_chunks_db.global_config.get(
+                "system_prompt_template", PROMPTS["rag_response"]
+            )
+            
+            # Create sample system prompt for overhead calculation
+            sample_sys_prompt = sys_prompt_template.format(
+                history="",
+                context_data="",  # Empty for overhead calculation
+                response_type=response_type,
+                user_prompt=user_prompt,
+            )
+            sys_prompt_template_tokens = len(tokenizer.encode(sample_sys_prompt))
+            
+            # Total system prompt overhead = template + query tokens
+            query_tokens = len(tokenizer.encode(query))
+            sys_prompt_overhead = sys_prompt_template_tokens + query_tokens
+            
+            buffer_tokens = 100  # Safety buffer
+            
+            # Get max_total_tokens from query_param or global_config
+            max_total_tokens = getattr(
+                query_param,
+                "max_total_tokens",
+                text_chunks_db.global_config.get("max_total_tokens", 120000),
+            )
+            
+            # Calculate available tokens for text chunks
+            used_tokens = kg_context_tokens + sys_prompt_overhead + buffer_tokens
+            available_chunk_tokens = max_total_tokens - used_tokens
+            
+            logger.debug(
+                f"Token allocation - Total: {max_total_tokens}, SysPrompt: {sys_prompt_overhead}, "
+                f"KG: {kg_context_tokens}, Buffer: {buffer_tokens}, Available for chunks: {available_chunk_tokens}"
+            )
+            
+            # Apply token truncation to chunks using the dynamic limit
+            from lightrag.utils import process_chunks_unified
+            final_truncated_chunks = await process_chunks_unified(
+                query=query,
+                unique_chunks=final_merged_chunks,
+                query_param=query_param,
+                global_config=text_chunks_db.global_config,
+                source_type=query_param.mode,
+                chunk_token_limit=available_chunk_tokens,
+            )
+            
+            # Rebuild text_units_context with final processed chunks
+            text_units_context = []
+            for i, chunk in enumerate(final_truncated_chunks):
+                text_units_context.append({
+                    "id": i + 1,
+                    "content": chunk["content"],
+                    "file_path": chunk.get("file_path", "unknown_source"),
+                    "The content is from": chunk.get("timestamp", ""),
+                })
+            
+            # logger.info(
+            #     f"Final chunk processing: {len(final_merged_chunks)} -> {len(text_units_context)} "
+            #    f"(available tokens: {available_chunk_tokens})"
+            #)
+            
+            # Apply chunk tracking if enabled
+            if final_truncated_chunks and chunk_tracking:
+                chunk_tracking_log = []
+                for chunk in final_truncated_chunks:
+                    chunk_id = chunk.get("chunk_id")
+                    if chunk_id and chunk_id in chunk_tracking:
+                        tracking_info = chunk_tracking[chunk_id]
+                        source = tracking_info["source"]
+                        frequency = tracking_info["frequency"]
+                        order = tracking_info["order"]
+                        chunk_tracking_log.append(f"{source}{frequency}/{order}")
+                    else:
+                        chunk_tracking_log.append("?0/0")
+                
+                if chunk_tracking_log:
+                    logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
+        
+        logger.info(f"Final processed context: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
+
+    else:
+        # No multi-hop expansion, but still need to process initial chunks
+        logger.info("No multi-hop expansion, processing initial chunks only")
+        
+        # Process initial chunks with round-robin merge and truncation
+        # Create merged_chunks with source labels
+        merged_chunks = []
+        
+        # Add vector chunks with source label
+        for chunk in initial_chunks["vector_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "vector",
+            })
+        
+        # Add entity chunks with source label
+        for chunk in initial_chunks["entity_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "entity",
+            })
+        
+        # Add relation chunks with source label
+        for chunk in initial_chunks["relation_chunks"]:
+            merged_chunks.append({
+                "content": chunk["content"],
+                "file_path": chunk.get("file_path", "unknown_source"),
+                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "timestamp": chunk.get("timestamp", ""),
+                "source": "relation",
+            })
+        
+        # Apply round-robin merge with deduplication
+        final_merged_chunks = []
+        seen_chunk_ids = set()
+        
+        # Separate chunks by source for round-robin merge
+        # IMPORTANT: Preserve the original ordering within each source type
+        vector_chunks = [c for c in merged_chunks if c.get("source") == "vector"]
+        entity_chunks = [c for c in merged_chunks if c.get("source") == "entity"]
+        relation_chunks = [c for c in merged_chunks if c.get("source") == "relation"]
+        
+        max_len = max(len(vector_chunks), len(entity_chunks), len(relation_chunks)) if any([
+                     vector_chunks, entity_chunks, relation_chunks]) else 0
+        
+        for i in range(max_len):
+            # Add from each source in round-robin fashion
+            for chunk_list in [vector_chunks, entity_chunks, relation_chunks]:
+                if i < len(chunk_list):
+                    chunk = chunk_list[i]
+                    chunk_id = chunk.get("chunk_id", "")
+                    if chunk_id and chunk_id not in seen_chunk_ids:
+                        seen_chunk_ids.add(chunk_id)
+                        final_merged_chunks.append({
+                            "content": chunk["content"],
+                            "file_path": chunk.get("file_path", "unknown_source"),
+                            "chunk_id": chunk_id,
+                            "timestamp": chunk.get("timestamp", ""),
+                        })
+        
+        total_chunks_before = len(merged_chunks)
+        logger.info(f"Round-robin merged total chunks from {total_chunks_before} to {len(final_merged_chunks)}")
+        
+        # Apply chunk_top_k truncation if specified
+        if query_param.chunk_top_k and len(final_merged_chunks) > query_param.chunk_top_k:
+            final_merged_chunks = final_merged_chunks[:query_param.chunk_top_k]
+            logger.info(f"Truncated chunks to chunk_top_k={query_param.chunk_top_k}: {len(final_merged_chunks)} chunks")
+        
+        # Apply token processing to final merged chunks
+        tokenizer = text_chunks_db.global_config.get("tokenizer")
+        if final_merged_chunks and tokenizer:
+            # Same token processing logic as in multi-hop expansion
+            entities_str = json.dumps(entities_context, ensure_ascii=False)
+            relations_str = json.dumps(relations_context, ensure_ascii=False)
+            
+            kg_context_template = """-----Entities(KG)-----
+
+```json
+{entities_str}
+```
+
+-----Relationships(KG)-----
+
+```json
+{relations_str}
+```
+
+-----Document Chunks(DC)-----
+
+```json
+[]
+```
+
+"""
+            kg_context = kg_context_template.format(
+                entities_str=entities_str, relations_str=relations_str
+            )
+            kg_context_tokens = len(tokenizer.encode(kg_context))
+            
+            user_prompt = query_param.user_prompt if query_param.user_prompt else ""
+            response_type = (
+                query_param.response_type
+                if query_param.response_type
+                else "Multiple Paragraphs"
+            )
+            
+            sys_prompt_template = text_chunks_db.global_config.get(
+                "system_prompt_template", PROMPTS["rag_response"]
+            )
+            
+            sample_sys_prompt = sys_prompt_template.format(
+                history="",
+                context_data="",
+                response_type=response_type,
+                user_prompt=user_prompt,
+            )
+            sys_prompt_template_tokens = len(tokenizer.encode(sample_sys_prompt))
+            
+            query_tokens = len(tokenizer.encode(query))
+            sys_prompt_overhead = sys_prompt_template_tokens + query_tokens
+            buffer_tokens = 100
+            
+            max_total_tokens = getattr(
+                query_param,
+                "max_total_tokens",
+                text_chunks_db.global_config.get("max_total_tokens", 120000),
+            )
+            
+            used_tokens = kg_context_tokens + sys_prompt_overhead + buffer_tokens
+            available_chunk_tokens = max_total_tokens - used_tokens
+            
+            logger.debug(
+                f"Token allocation - Total: {max_total_tokens}, SysPrompt: {sys_prompt_overhead}, "
+                f"KG: {kg_context_tokens}, Buffer: {buffer_tokens}, Available for chunks: {available_chunk_tokens}"
+            )
+            
+            from lightrag.utils import process_chunks_unified
+            final_truncated_chunks = await process_chunks_unified(
+                query=query,
+                unique_chunks=final_merged_chunks,
+                query_param=query_param,
+                global_config=text_chunks_db.global_config,
+                source_type=query_param.mode,
+                chunk_token_limit=available_chunk_tokens,
+            )
+            
+            # Rebuild text_units_context with final processed chunks
+            text_units_context = []
+            for i, chunk in enumerate(final_truncated_chunks):
+                text_units_context.append({
+                    "id": i + 1,
+                    "content": chunk["content"],
+                    "file_path": chunk.get("file_path", "unknown_source"),
+                    "The content is from": chunk.get("timestamp", ""),
+                })
+            
+            logger.info(
+                f"Final chunk processing: {len(final_merged_chunks)} -> {len(text_units_context)} "
+                f"(available tokens: {available_chunk_tokens})"
+            )
+            
+            # Apply chunk tracking if enabled
+            if final_truncated_chunks and chunk_tracking:
+                chunk_tracking_log = []
+                for chunk in final_truncated_chunks:
+                    chunk_id = chunk.get("chunk_id")
+                    if chunk_id and chunk_id in chunk_tracking:
+                        tracking_info = chunk_tracking[chunk_id]
+                        source = tracking_info["source"]
+                        frequency = tracking_info["frequency"]
+                        order = tracking_info["order"]
+                        chunk_tracking_log.append(f"{source}{frequency}/{order}")
+                    else:
+                        chunk_tracking_log.append("?0/0")
+                
+                if chunk_tracking_log:
+                    logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
+        
+        logger.info(f"Final processed context: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
+
+    # Re-assign IDs after merging expanded data and potential enhancement
         for i, entity in enumerate(entities_context):
             entity["id"] = i + 1
         for i, relation in enumerate(relations_context):
