@@ -11,11 +11,7 @@ async def main():
         print("Initialization success!!")
 
         query = """
-        Based on [Company]: Apple, [Target Calendar Year]: 2025 Q2, 
-        [Theme]: Tariffs and Supply Chain Diversification, analyze the latest developments from an analyst’s perspective. 
-        Summarize the content with a focus on cross-quarter, trend forecasting, and potential impacts on future revenue and financial reports. 
-        Include the timing of key events and contrast the latest data with previous periods for enhanced analytical insights. 
-        Additionally, identify any potential underlying issues that might affect TSMC.
+        Does collaboration of Apple and TSMC have any new update in the 2025?
         """
 
         # 將時間相關模糊問題進行 rewrite
@@ -29,12 +25,13 @@ async def main():
                 # conversation_history
                 history_turns=0,
                 top_k=20,
-                chunk_top_k= 20,
+                chunk_top_k= 10,
                 max_total_tokens=120000,
                 max_entity_tokens=30000,
                 max_relation_tokens=30000,
                 max_hop=3,
                 max_neighbors= 10,
+                multi_hop_relevance_threshold=0.5,
                 enable_rerank=False,
                 top_ppr_nodes=5,       
                 top_fastrp_nodes=5,     
@@ -52,24 +49,6 @@ async def main():
 
                     ## Step 4: Answer Synthesis
                     Provide a comprehensive answer based on the reasoning above.
-
-
-                    You have to answer the question following the format below:
-                    ## <Title of the report>
-                    ### Overview
-                    <description: Provide a high-level summary, including scope, purpose, and context.>
-
-                    ### Key Themes
-                    <description: Extract the main recurring themes, announcements, priorities, challenges, and opportunities.>
-
-                    ### Comparative Insights
-                    <description: Highlight similarities, differences, shifts in tone, and evolving trends.>
-
-                    ### Actionable Insights
-                    <description: Summarize practical implications or recommendations (e.g., for strategy, investment, or risk management).>
-
-                    ### Reference
-                    <description: List ALL sources used>
                     """,
                 response_type="Single Paragraph",
                 only_need_context=False,
@@ -89,3 +68,21 @@ async def main():
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
+"""
+You have to answer the question following the format below:
+## <Title of the report>
+### Overview
+<description: Provide a high-level summary, including scope, purpose, and context.>
+
+### Key Themes
+<description: Extract the main recurring themes, announcements, priorities, challenges, and opportunities.>
+
+### Comparative Insights
+<description: Highlight similarities, differences, shifts in tone, and evolving trends.>
+
+### Actionable Insights
+<description: Summarize practical implications or recommendations (e.g., for strategy, investment, or risk management).>
+
+### Reference
+<description: List ALL sources used>
+"""
