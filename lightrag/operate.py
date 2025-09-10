@@ -2360,6 +2360,122 @@ async def _calculate_relevance_score(
     return final_score
 
 
+def _calculate_relevance_scores_vectorized(
+    candidates: list[dict],
+    nodes_data: list[dict],
+    edges_data: list[dict],
+    current_hop: int,
+    ll_keywords: str,
+    hl_keywords: str,
+    entity_vectors_cache: dict[str, list[float]],
+    relationship_vectors_cache: dict[str, list[float]],
+    query_ll_embedding: list[float],
+    query_hl_embedding: list[float],
+) -> list[float]:
+    """Calculate relevance scores for all candidates using vectorized numpy operations."""
+    import numpy as np
+    
+    n_candidates = len(candidates)
+    if n_candidates == 0:
+        return []
+    
+    # Prepare matrices for vectorized computation
+    ll_similarities = np.zeros(n_candidates)
+    hl_similarities = np.zeros(n_candidates)
+    
+    # 1. Vectorized Low-level similarity calculation (entities)
+    if query_ll_embedding is not None and entity_vectors_cache:
+        query_ll_vec = np.array(query_ll_embedding)
+        query_ll_norm = np.linalg.norm(query_ll_vec)
+        
+        if query_ll_norm > 0:
+            entity_vectors = []
+            valid_ll_indices = []
+            
+            for i, (candidate, node_data) in enumerate(zip(candidates, nodes_data)):
+                entity_name = candidate.get("entity_name", "")
+                if entity_name in entity_vectors_cache:
+                    entity_vectors.append(entity_vectors_cache[entity_name])
+                    valid_ll_indices.append(i)
+            
+            if entity_vectors:
+                # Stack entity vectors into matrix: (n_valid_entities, embed_dim)
+                entity_matrix = np.array(entity_vectors)
+                
+                # Vectorized cosine similarity computation
+                entity_norms = np.linalg.norm(entity_matrix, axis=1)
+                valid_entity_mask = entity_norms > 0
+                
+                if np.any(valid_entity_mask):
+                    # Compute dot products for all entities at once
+                    dot_products = np.dot(entity_matrix, query_ll_vec)
+                    
+                    # Vectorized cosine similarity
+                    cosine_sims = np.zeros(len(entity_vectors))
+                    cosine_sims[valid_entity_mask] = dot_products[valid_entity_mask] / (
+                        entity_norms[valid_entity_mask] * query_ll_norm
+                    )
+                    cosine_sims = np.maximum(cosine_sims, 0.0)  # Ensure non-negative
+                    
+                    # Map back to original candidate indices
+                    for j, original_idx in enumerate(valid_ll_indices):
+                        ll_similarities[original_idx] = cosine_sims[j]
+    
+    # 2. Vectorized High-level similarity calculation (relationships)
+    if query_hl_embedding is not None and relationship_vectors_cache:
+        query_hl_vec = np.array(query_hl_embedding)
+        query_hl_norm = np.linalg.norm(query_hl_vec)
+        
+        if query_hl_norm > 0:
+            relation_vectors = []
+            valid_hl_indices = []
+            
+            for i, (candidate, edge_data) in enumerate(zip(candidates, edges_data)):
+                edge = candidate.get("edge", {})
+                edge_src = edge.get('src_id', '')
+                edge_tgt = edge.get('tgt_id', '')
+                edge_key = f"{edge_src}-{edge_tgt}"
+                
+                if edge_key in relationship_vectors_cache:
+                    relation_vectors.append(relationship_vectors_cache[edge_key])
+                    valid_hl_indices.append(i)
+            
+            if relation_vectors:
+                # Stack relation vectors into matrix: (n_valid_relations, embed_dim)
+                relation_matrix = np.array(relation_vectors)
+                
+                # Vectorized cosine similarity computation
+                relation_norms = np.linalg.norm(relation_matrix, axis=1)
+                valid_relation_mask = relation_norms > 0
+                
+                if np.any(valid_relation_mask):
+                    # Compute dot products for all relations at once
+                    dot_products = np.dot(relation_matrix, query_hl_vec)
+                    
+                    # Vectorized cosine similarity
+                    cosine_sims = np.zeros(len(relation_vectors))
+                    cosine_sims[valid_relation_mask] = dot_products[valid_relation_mask] / (
+                        relation_norms[valid_relation_mask] * query_hl_norm
+                    )
+                    cosine_sims = np.maximum(cosine_sims, 0.0)  # Ensure non-negative
+                    
+                    # Map back to original candidate indices
+                    for j, original_idx in enumerate(valid_hl_indices):
+                        hl_similarities[original_idx] = cosine_sims[j]
+    
+    # 3. Vectorized distance decay calculation
+    decay = 0.8 ** current_hop
+    
+    # 4. Vectorized final score computation
+    final_scores = (
+        0.4 * ll_similarities + 
+        0.4 * hl_similarities + 
+        0.2 * decay
+    )
+    
+    return final_scores.tolist()
+
+
 def _allocate_expansion_resources(total_neighbors: int, top_fastrp_nodes: int) -> tuple[int, int]:
     """Allocate neighbor budget between semantic expansion and structural analysis."""
     
@@ -3137,14 +3253,78 @@ async def _original_multi_hop_expand(
                         edge_to_node_mapping[edge_key] = []
                     edge_to_node_mapping[edge_key].append((node_name, neighbor_name))
         
-        # Batch retrieve all edge data at once
-        logger.debug(f"Multi-hop optimization: Batch retrieving {len(all_edge_pairs)} edges (reduced from {total_edges} individual calls)")
-        if all_edge_pairs:
-            all_edge_data_dict = await knowledge_graph_inst.get_edges_batch(all_edge_pairs)
-        else:
-            all_edge_data_dict = {}
+        # Prepare all batch requests in parallel
+        import asyncio
         
-        # Second pass: build neighbor candidates using batch results
+        # Prepare edge batch request
+        async def get_edges_task():
+            if all_edge_pairs:
+                return await knowledge_graph_inst.get_edges_batch(all_edge_pairs)
+            return {}
+        
+        # Prepare unique collections for parallel requests (optimized single pass)
+        unique_entity_names_set = set()
+        for edge_key, node_neighbor_pairs in edge_to_node_mapping.items():
+            for node_name, neighbor_name in node_neighbor_pairs:
+                unique_entity_names_set.add(neighbor_name)
+        
+        unique_entity_names = list(unique_entity_names_set)
+        unique_edge_keys = list(edge_to_node_mapping.keys())
+        unique_relationships = [{"src_id": edge_key[0], "tgt_id": edge_key[1]} for edge_key in unique_edge_keys]
+        
+        # Prepare all async tasks
+        async def get_entity_vectors_task():
+            if unique_entity_names:
+                try:
+                    return await _get_entity_vectors_batch(unique_entity_names, entities_vdb)
+                except Exception as e:
+                    logger.debug(f"Error fetching entity vectors batch: {e}")
+                    return {}
+            return {}
+        
+        async def get_relationship_vectors_task():
+            if unique_relationships:
+                try:
+                    return await _get_relationship_vectors_batch(unique_relationships, relationships_vdb)
+                except Exception as e:
+                    logger.debug(f"Error fetching relationship vectors batch: {e}")
+                    return {}
+            return {}
+        
+        async def get_nodes_task():
+            if unique_entity_names:
+                return await knowledge_graph_inst.get_nodes_batch(unique_entity_names)
+            return {}
+        
+        # Execute all batch requests in parallel
+        logger.debug(f"Multi-hop parallel optimization: Fetching {len(all_edge_pairs)} edges, {len(unique_entity_names)} entities, {len(unique_relationships)} relationships, and {len(unique_entity_names)} nodes in parallel")
+        
+        all_edge_data_dict, entity_vectors_cache, relationship_vectors_cache, all_nodes_dict = await asyncio.gather(
+            get_edges_task(),
+            get_entity_vectors_task(),
+            get_relationship_vectors_task(),
+            get_nodes_task(),
+            return_exceptions=True
+        )
+        
+        # Handle any exceptions from parallel execution
+        if isinstance(all_edge_data_dict, Exception):
+            logger.warning(f"Error in edge batch retrieval: {all_edge_data_dict}")
+            all_edge_data_dict = {}
+        if isinstance(entity_vectors_cache, Exception):
+            logger.warning(f"Error in entity vectors batch retrieval: {entity_vectors_cache}")
+            entity_vectors_cache = {}
+        if isinstance(relationship_vectors_cache, Exception):
+            logger.warning(f"Error in relationship vectors batch retrieval: {relationship_vectors_cache}")
+            relationship_vectors_cache = {}
+        if isinstance(all_nodes_dict, Exception):
+            logger.warning(f"Error in nodes batch retrieval: {all_nodes_dict}")
+            all_nodes_dict = {}
+        
+        logger.debug(f"Parallel retrieval completed: {len(all_edge_data_dict)} edges, {len(entity_vectors_cache)} entity vectors, {len(relationship_vectors_cache)} relationship vectors, {len(all_nodes_dict)} nodes")
+        
+        # Build neighbor candidates using batch results
+        neighbor_candidates = []
         for edge_key, node_neighbor_pairs in edge_to_node_mapping.items():
             edge_data = all_edge_data_dict.get(edge_key)
             
@@ -3161,54 +3341,17 @@ async def _original_multi_hop_expand(
                         "edge": edge_info
                     })
         
-        # Pre-fetch vectors for performance optimization
-        entity_vectors_cache = {}
-        relationship_vectors_cache = {}
-        
-        if neighbor_candidates:
-            # Collect unique entity names and relationships for batch vector retrieval
-            unique_entity_names = list(set(candidate["entity_name"] for candidate in neighbor_candidates))
-            unique_relationships = []
-            for candidate in neighbor_candidates:
-                edge = candidate["edge"]
-                src_id = edge.get("src_id", "")
-                tgt_id = edge.get("tgt_id", "")
-                if src_id and tgt_id:
-                    unique_relationships.append({"src_id": src_id, "tgt_id": tgt_id})
-            
-            logger.debug(f"Fetching vectors for {len(unique_entity_names)} entities and {len(unique_relationships)} relationships")
-            
-            # Batch fetch entity vectors
-            try:
-                entity_vectors_cache = await _get_entity_vectors_batch(unique_entity_names, entities_vdb)
-                logger.debug(f"Retrieved {len(entity_vectors_cache)} entity vectors from cache")
-            except Exception as e:
-                logger.debug(f"Error fetching entity vectors batch: {e}")
-            
-            # Batch fetch relationship vectors
-            try:
-                relationship_vectors_cache = await _get_relationship_vectors_batch(unique_relationships, relationships_vdb)
-                logger.debug(f"Retrieved {len(relationship_vectors_cache)} relationship vectors from cache")
-            except Exception as e:
-                logger.debug(f"Error fetching relationship vectors batch: {e}")
-        
-        # Score and select best neighbors
+        # Score and select best neighbors using vectorized computation
         scored_neighbors = []
         
-        # Batch retrieve all node data at once
-        unique_candidate_names = list(set(candidate["entity_name"] for candidate in neighbor_candidates))
-        logger.debug(f"Multi-hop optimization: Batch retrieving {len(unique_candidate_names)} unique nodes (reduced from {len(neighbor_candidates)} individual calls)")
-        
-        if unique_candidate_names:
-            all_nodes_dict = await knowledge_graph_inst.get_nodes_batch(unique_candidate_names)
-        else:
-            all_nodes_dict = {}
-        
-        # Process candidates with batch-retrieved node data
-        for candidate in neighbor_candidates:
-            try:
+        if neighbor_candidates:
+            # Prepare data structures for vectorized scoring
+            candidates_with_node_data = []
+            nodes_data_list = []
+            edges_data_list = []
+            
+            for candidate in neighbor_candidates:
                 node_data = all_nodes_dict.get(candidate["entity_name"])
-                
                 if node_data:
                     # Add entity_name to node_data
                     full_node_data = {
@@ -3216,33 +3359,36 @@ async def _original_multi_hop_expand(
                         "entity_name": candidate["entity_name"],
                         "rank": node_data.get("degree", 0)
                     }
-                    
-                    # Calculate relevance score with vector caching
-                    score = await _calculate_relevance_score(
-                        full_node_data,
-                        candidate["edge"],
-                        hop,
-                        ll_keywords,
-                        hl_keywords,
-                        entities_vdb,
-                        relationships_vdb,
-                        entity_vectors_cache,
-                        relationship_vectors_cache,
-                        query_ll_embedding,
-                        query_hl_embedding
-                    )
-                    
-                    # Log first few scores for debugging
-                    # if len(scored_neighbors) < 3:
-                        # logger.info(f"Multi-hop: Sample score for '{candidate['entity_name']}': {score:.4f}")
-                    
+                    candidates_with_node_data.append(candidate)
+                    nodes_data_list.append(full_node_data)
+                    edges_data_list.append(candidate["edge"])
+            
+            if candidates_with_node_data:
+                logger.debug(f"Multi-hop vectorized scoring: Processing {len(candidates_with_node_data)} candidates with numpy vectorization")
+                
+                # Vectorized relevance scoring for all candidates at once
+                scores = _calculate_relevance_scores_vectorized(
+                    candidates_with_node_data,
+                    nodes_data_list,
+                    edges_data_list,
+                    hop,
+                    ll_keywords,
+                    hl_keywords,
+                    entity_vectors_cache,
+                    relationship_vectors_cache,
+                    query_ll_embedding,
+                    query_hl_embedding
+                )
+                
+                # Apply threshold and build scored neighbors
+                for i, (candidate, node_data, score) in enumerate(zip(candidates_with_node_data, nodes_data_list, scores)):
                     if score >= query_param.multi_hop_relevance_threshold:
-                        scored_neighbors.append((full_node_data, candidate["edge"], score))
+                        scored_neighbors.append((node_data, candidate["edge"], score))
                     else:
                         logger.debug(f"Node {candidate['entity_name']} rejected: score {score:.3f} < threshold {query_param.multi_hop_relevance_threshold}")
-                        
-            except Exception as e:
-                logger.warning(f"Error scoring neighbor {candidate.get('entity_name', 'unknown')}: {e}")
+                
+                # Log performance metrics
+                logger.debug(f"Vectorized scoring completed: {len(scored_neighbors)} qualified out of {len(candidates_with_node_data)} candidates")
         
         logger.info(f"Multi-hop: Hop {hop} found {len(scored_neighbors)} qualified nodes")
         
