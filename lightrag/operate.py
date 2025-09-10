@@ -3117,31 +3117,49 @@ async def _original_multi_hop_expand(
         neighbor_candidates = []
         total_edges = 0
         
+        # First pass: collect all unique edges for batch retrieval
+        all_edge_pairs = []
+        edge_to_node_mapping = {}  # Maps edge tuple to (node_name, neighbor_name)
+        
         for node_name in node_names:
             edges = batch_edges_dict.get(node_name, [])
             total_edges += len(edges)
             logger.debug(f"Node '{node_name}' has {len(edges)} edges")
             
             for edge in edges:
-                # Get edge details
-                edge_pairs = [{"src": edge[0], "tgt": edge[1]}]
-                edge_data_dict = await knowledge_graph_inst.get_edges_batch(edge_pairs)
-                edge_data = edge_data_dict.get((edge[0], edge[1]))
+                edge_key = (edge[0], edge[1])
+                neighbor_name = edge[1] if edge[0] == node_name else edge[0]
                 
-                if edge_data:
-                    edge_info = {
-                        "src_id": edge[0],
-                        "tgt_id": edge[1],
-                        **edge_data
-                    }
-                    
-                    # Find neighbor node (the one that's not in visited)
-                    neighbor_name = edge[1] if edge[0] == node_name else edge[0]
-                    if neighbor_name not in visited_nodes:
-                        neighbor_candidates.append({
-                            "entity_name": neighbor_name,
-                            "edge": edge_info
-                        })
+                if neighbor_name not in visited_nodes:
+                    # Add to batch if not already added
+                    if edge_key not in edge_to_node_mapping:
+                        all_edge_pairs.append({"src": edge[0], "tgt": edge[1]})
+                        edge_to_node_mapping[edge_key] = []
+                    edge_to_node_mapping[edge_key].append((node_name, neighbor_name))
+        
+        # Batch retrieve all edge data at once
+        logger.debug(f"Multi-hop optimization: Batch retrieving {len(all_edge_pairs)} edges (reduced from {total_edges} individual calls)")
+        if all_edge_pairs:
+            all_edge_data_dict = await knowledge_graph_inst.get_edges_batch(all_edge_pairs)
+        else:
+            all_edge_data_dict = {}
+        
+        # Second pass: build neighbor candidates using batch results
+        for edge_key, node_neighbor_pairs in edge_to_node_mapping.items():
+            edge_data = all_edge_data_dict.get(edge_key)
+            
+            if edge_data:
+                edge_info = {
+                    "src_id": edge_key[0],
+                    "tgt_id": edge_key[1],
+                    **edge_data
+                }
+                
+                for node_name, neighbor_name in node_neighbor_pairs:
+                    neighbor_candidates.append({
+                        "entity_name": neighbor_name,
+                        "edge": edge_info
+                    })
         
         # Pre-fetch vectors for performance optimization
         entity_vectors_cache = {}
@@ -3176,11 +3194,20 @@ async def _original_multi_hop_expand(
         
         # Score and select best neighbors
         scored_neighbors = []
+        
+        # Batch retrieve all node data at once
+        unique_candidate_names = list(set(candidate["entity_name"] for candidate in neighbor_candidates))
+        logger.debug(f"Multi-hop optimization: Batch retrieving {len(unique_candidate_names)} unique nodes (reduced from {len(neighbor_candidates)} individual calls)")
+        
+        if unique_candidate_names:
+            all_nodes_dict = await knowledge_graph_inst.get_nodes_batch(unique_candidate_names)
+        else:
+            all_nodes_dict = {}
+        
+        # Process candidates with batch-retrieved node data
         for candidate in neighbor_candidates:
             try:
-                # Get node details
-                node_dict = await knowledge_graph_inst.get_nodes_batch([candidate["entity_name"]])
-                node_data = node_dict.get(candidate["entity_name"])
+                node_data = all_nodes_dict.get(candidate["entity_name"])
                 
                 if node_data:
                     # Add entity_name to node_data
