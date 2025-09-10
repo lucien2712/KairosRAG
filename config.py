@@ -23,7 +23,7 @@ async def initialize_rag():
         working_dir=WORKING_DIR,
         embedding_func=openai_embed,
         llm_model_func=gpt_4o_mini_complete,
-        chunk_token_size=1200,
+        chunk_token_size=600,
         chunk_overlap_token_size=100,
         enable_node_embedding=True,
         enable_llm_cache= False

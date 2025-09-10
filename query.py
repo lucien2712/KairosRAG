@@ -11,7 +11,7 @@ async def main():
         print("Initialization success!!")
 
         query = """
-        Does collaboration of Apple and TSMC have any new update in the 2025?
+        Does any tsmc information be mention from apple?
         """
 
         # 將時間相關模糊問題進行 rewrite
@@ -25,13 +25,13 @@ async def main():
                 # conversation_history
                 history_turns=0,
                 top_k=20,
-                chunk_top_k= 10,
+                chunk_top_k= 20,
                 max_total_tokens=120000,
                 max_entity_tokens=30000,
                 max_relation_tokens=30000,
-                max_hop=3,
-                max_neighbors= 10,
-                multi_hop_relevance_threshold=0.5,
+                max_hop=2,
+                max_neighbors= 20,
+                multi_hop_relevance_threshold=0.3,
                 enable_rerank=False,
                 top_ppr_nodes=5,       
                 top_fastrp_nodes=5,     

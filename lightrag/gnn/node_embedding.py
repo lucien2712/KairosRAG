@@ -48,7 +48,7 @@ class NodeEmbeddingEnhancer:
         # Try to load existing data
         self._load_persisted_data()
         
-    async def compute_embeddings_during_insert(
+    async def compute_node_embeddings(
         self, 
         entities: List[Dict],
         relations: List[Dict],
@@ -125,7 +125,7 @@ class NodeEmbeddingEnhancer:
         return graph
         
     async def _compute_fastrp_embeddings(self) -> Dict[str, np.ndarray]:
-        """Compute FastRP embeddings for all nodes using Fast Random Projection."""
+        """Compute FastRP embeddings using proper degree normalization and self-loops."""
         if len(self.graph.nodes()) < 2:
             logger.warning("Graph too small for FastRP, using random embeddings")
             return {node: np.random.normal(0, 0.1, self.config.embedding_dimension) 
@@ -138,45 +138,66 @@ class NodeEmbeddingEnhancer:
             
             # Convert NetworkX graph to adjacency matrix
             node_list = list(self.graph.nodes())
-            node_to_idx = {node: idx for idx, node in enumerate(node_list)}
             n_nodes = len(node_list)
-            
-            # Create adjacency matrix
-            adj_matrix = nx.adjacency_matrix(self.graph, nodelist=node_list)
-            adj_matrix = adj_matrix.astype(np.float32)
-            
-            # Initialize random projection matrix
-            # Using sparse random matrix for efficiency
             embedding_dim = self.config.embedding_dimension
-            random_matrix = self._generate_sparse_random_matrix(n_nodes, embedding_dim)
             
-            # FastRP algorithm: iterative matrix multiplication
-            embeddings_matrix = random_matrix.copy()
+            # Create adjacency matrix with self-loops
+            A = nx.adjacency_matrix(self.graph, nodelist=node_list).astype(np.float32)
+            A = A + sparse.eye(A.shape[0], dtype=np.float32)  # Add self-loops
             
-            for i, weight in enumerate(self.config.iteration_weights):
-                if i == 0:
-                    # First iteration: use random matrix
-                    continue
+            # Degree normalization
+            deg = np.asarray(A.sum(axis=1)).ravel()
+            deg[deg == 0] = 1.0  # Avoid division by zero
+            
+            # Create normalized adjacency matrix S = D^{-1/2} (A+I) D^{-1/2}
+            D_inv_sqrt = sparse.diags(1.0 / np.sqrt(deg))
+            S = D_inv_sqrt @ A @ D_inv_sqrt
+            
+            # Degree-based normalization strength r
+            r = self.config.normalization_strength  # e.g., -0.1
+            D_r = sparse.diags(deg ** r)
+            
+            # Initialize random projection matrix R (n x d)
+            R = np.random.choice([-1.0, 1.0], size=(n_nodes, embedding_dim)).astype(np.float32)
+            # Row normalize R
+            R_norms = np.linalg.norm(R, axis=1, keepdims=True)
+            R_norms = np.where(R_norms > 1e-9, R_norms, 1e-9)
+            R = R / R_norms
+            
+            # FastRP multi-order aggregation
+            X = np.zeros((n_nodes, embedding_dim), dtype=np.float32)
+            Z = R.copy()
+            
+            for k, weight in enumerate(self.config.iteration_weights):
+                # Apply degree normalization: D^r Z D^r
+                if sparse.issparse(D_r):
+                    term = D_r @ Z
+                    # Convert to dense for element-wise multiplication
+                    if sparse.issparse(term):
+                        term = term.toarray()
+                    # Apply second D^r normalization
+                    term = (deg ** r)[:, np.newaxis] * term
                 else:
-                    # Subsequent iterations: propagate through adjacency matrix
-                    embeddings_matrix = adj_matrix @ embeddings_matrix
-                    
-                # Apply normalization
-                if self.config.normalization_strength != 0:
-                    row_norms = np.linalg.norm(embeddings_matrix, axis=1, keepdims=True)
-                    row_norms = np.power(row_norms, self.config.normalization_strength)
-                    embeddings_matrix = embeddings_matrix / (row_norms + 1e-10)
+                    term = (deg ** r)[:, np.newaxis] * Z * (deg ** r)[:, np.newaxis]
                 
-                # Weight the iteration
-                if i == 0:
-                    final_embeddings = weight * embeddings_matrix
-                else:
-                    final_embeddings += weight * embeddings_matrix
+                # Accumulate weighted term
+                X += weight * term
+                
+                # Propagate for next iteration: Z = S @ Z
+                if k < len(self.config.iteration_weights) - 1:  # Don't compute for last iteration
+                    Z = S @ Z
+                    if sparse.issparse(Z):
+                        Z = Z.toarray()
+            
+            # Optional: final row normalization for stability
+            final_norms = np.linalg.norm(X, axis=1, keepdims=True)
+            final_norms = np.where(final_norms > 1e-9, final_norms, 1e-9)
+            X = X / final_norms
             
             # Convert back to dictionary format
             embeddings = {}
             for idx, node in enumerate(node_list):
-                embeddings[str(node)] = final_embeddings[idx]
+                embeddings[str(node)] = X[idx]
                     
             logger.info(f"FastRP embeddings computed for {len(embeddings)} nodes")
             return embeddings
@@ -187,24 +208,6 @@ class NodeEmbeddingEnhancer:
             return {node: np.random.normal(0, 0.1, self.config.embedding_dimension) 
                    for node in self.graph.nodes()}
                    
-    def _generate_sparse_random_matrix(self, n_nodes: int, embedding_dim: int) -> np.ndarray:
-        """Generate sparse random projection matrix for FastRP."""
-        # Create sparse random matrix following FastRP paper
-        # Use {-1, 0, 1} values with specific probabilities
-        matrix = np.zeros((n_nodes, embedding_dim), dtype=np.float32)
-        
-        # Fill matrix with sparse random values
-        # Probability: 1/6 for -1, 2/3 for 0, 1/6 for 1
-        for i in range(n_nodes):
-            for j in range(embedding_dim):
-                rand_val = np.random.random()
-                if rand_val < 1/6:
-                    matrix[i, j] = -1.0
-                elif rand_val > 5/6:
-                    matrix[i, j] = 1.0
-                # else: remains 0.0
-                
-        return matrix
                    
     def _compute_pagerank_scores(self) -> Dict[str, float]:
         """Compute standard PageRank scores for all nodes."""

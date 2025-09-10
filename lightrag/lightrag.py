@@ -346,7 +346,7 @@ class LightRAG:
     enable_llm_cache_for_entity_extract: bool = field(default=True)
     """If True, enables caching for entity extraction steps to reduce LLM costs."""
 
-    enable_node_embedding: bool = field(default=False)
+    enable_node_embedding: bool = field(default=True)
     """If True, enables FastRP + Personalized PageRank enhanced embeddings during insertion and retrieval."""
 
     # Extensions
@@ -886,6 +886,8 @@ class LightRAG:
         file_paths: str | list[str] | None = None,
         timestamps: str | list[str] | None = None,
         track_id: str | None = None,
+        agentic_merging: bool = False,
+        agentic_merging_threshold: float = 0.8,
     ) -> str:
         """Sync Insert documents with checkpoint support
 
@@ -899,6 +901,8 @@ class LightRAG:
             file_paths: single string of the file path or list of file paths, used for citation
             timestamps: single string or list of timestamps for each document, used for temporal entity/relation descriptions
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
+            agentic_merging: whether to perform agentic entity merging after document processing
+            agentic_merging_threshold: similarity threshold for agentic merging (default: 0.8)
 
         Returns:
             str: tracking ID for monitoring processing status
@@ -913,6 +917,8 @@ class LightRAG:
                 file_paths,
                 timestamps,
                 track_id,
+                agentic_merging,
+                agentic_merging_threshold,
             )
         )
 
@@ -925,6 +931,8 @@ class LightRAG:
         file_paths: str | list[str] | None = None,
         timestamps: str | list[str] | None = None,
         track_id: str | None = None,
+        agentic_merging: bool = False,
+        agentic_merging_threshold: float = 0.8,
     ) -> str:
         """Async Insert documents with checkpoint support
 
@@ -938,6 +946,8 @@ class LightRAG:
             file_paths: list of file paths corresponding to each document, used for citation
             timestamps: list of timestamps corresponding to each document, used for temporal entity/relation descriptions
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
+            agentic_merging: whether to perform agentic entity merging after document processing
+            agentic_merging_threshold: similarity threshold for agentic merging (default: 0.8)
 
         Returns:
             str: tracking ID for monitoring processing status
@@ -950,6 +960,19 @@ class LightRAG:
         await self.apipeline_process_enqueue_documents(
             split_by_character, split_by_character_only
         )
+
+        # Handle FastRP and PPR computation based on agentic_merging setting
+        if agentic_merging:
+            # Flow 2: insert → agentic merging → FastRP & PPR
+            logger.info(f"Starting agentic entity merging with threshold {agentic_merging_threshold}")
+            merge_result = await self.aagentic_merging(threshold=agentic_merging_threshold)
+            logger.info(f"Agentic merging completed: {merge_result}")
+            
+            # Compute FastRP and PPR after entity merging
+            await self._compute_node_embeddings()
+        else:
+            # Flow 1: insert → FastRP & PPR
+            await self._compute_node_embeddings()
 
         return track_id
 
@@ -3124,11 +3147,9 @@ class LightRAG:
         entities = []
         entity_embeddings = []
         
-        # Debug: Check what we have in entities_vdb_data
-        print(f"Sample entity data keys: {list(entities_vdb_data.keys())[:5] if entities_vdb_data else 'None'}")
         if entities_vdb_data:
             sample_entity = next(iter(entities_vdb_data.values()))
-            print(f"Sample entity data structure: {list(sample_entity.keys()) if sample_entity else 'None'}")
+            
         
         for entity_name, entity_data in entities_vdb_data.items():
             # print(f"Processing entity: {entity_name}")
@@ -3309,3 +3330,58 @@ class LightRAG:
             "processing_time": processing_time,
             "similarity_threshold": threshold
         }
+
+    async def _compute_node_embeddings(self):
+        """Compute FastRP and PPR embeddings after document insertion (with or without merging)"""
+        try:
+            if not hasattr(self, 'node_embedding') or not self.node_embedding:
+                logger.info("Node embedding enhancer not available, skipping FastRP/PPR computation")
+                return
+                
+            # Get all entities and relations from storage
+            logger.info("Retrieving entities and relations for FastRP/PPR computation")
+            all_nodes = await self.chunk_entity_relation_graph.get_all_nodes()
+            all_edges = await self.chunk_entity_relation_graph.get_all_edges()
+            
+            if not all_nodes or not all_edges:
+                logger.info("No entities or relations found for FastRP/PPR computation")
+                return
+                
+            # Convert nodes to entities format for node_embedding_enhancer
+            entities = []
+            for node_dict in all_nodes:
+                node_id = node_dict.get('id', '')
+                entities.append({
+                    'entity_name': node_id,
+                    'id': node_id,
+                    **node_dict
+                })
+                
+            # Convert edges to relations format for node_embedding_enhancer  
+            relations = []
+            for edge_data in all_edges:
+                relations.append({
+                    'src_id': edge_data.get('source', ''),
+                    'tgt_id': edge_data.get('target', ''),
+                    **edge_data
+                })
+                
+            logger.info(f"Computing FastRP and PPR embeddings for {len(entities)} entities and {len(relations)} relations")
+            
+            # Clear existing embeddings and compute fresh
+            self.node_embedding.fastrp_embeddings = None
+            self.node_embedding.pagerank_scores = None
+            self.node_embedding.graph = None
+            
+            # Compute embeddings (note: text_embeddings parameter is not used in current implementation)
+            await self.node_embedding.compute_node_embeddings(
+                entities=entities,
+                relations=relations, 
+                text_embeddings={}
+            )
+            
+            logger.info("Successfully computed FastRP and PPR embeddings after document insertion")
+            
+        except Exception as e:
+            logger.error(f"Error computing node embeddings after insertion: {e}")
+            # Don't raise the error to avoid breaking the insert process

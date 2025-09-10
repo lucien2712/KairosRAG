@@ -1,6 +1,6 @@
 # KairosRAG
 
-**KairosRAG** is an enhanced framework built on top of [LightRAG](https://github.com/HKUDS/LightRAG), introducing **time-awareness, multi-hop retrieval optimization, adaptive schema induction, and agentic entity management** for domain-specific and temporally-sensitive knowledge graphs.
+**KairosRAG** is an enhanced framework built on top of [LightRAG](https://github.com/HKUDS/LightRAG), introducing **time-awareness, three-perspective retrieval expansion, adaptive schema induction, and agentic entity management** for domain-specific and temporally-sensitive knowledge graphs.
 
 ## 🚀 Key Contributions
 
@@ -16,15 +16,23 @@ $$Relation'(r, t) = T(t) \oplus Relation(r)$$
 
 where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatenation
 
-### 🔍 **Three-Way Parallel Expansion Architecture**
+### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-way parallel expansion** combining multi-hop traversal, Personalized PageRank, and FastRP structural similarity for comprehensive retrieval.
+* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through FastRP embeddings.
 * *Currently implemented for the NanoVectorDB backend.*
+
+**Architecture Overview:**
+
+The system processes each query through three independent perspectives and merges results:
+
+1. **Multi-hop Semantic Expansion**: Traditional graph traversal based on query-entity similarity
+2. **Global Importance Analysis**: PageRank-based ranking of entities relative to seed nodes  
+3. **Structural Pattern Analysis**: FastRP embeddings for discovering structurally similar entities
 
 **Mathematical Framework:**
 
-$$R_{final} = R_{multihop} \cup R_{ppr} \cup R_{fastrp}$$
+$$R_{final} = \text{merge}(R_{multihop}, R_{ppr}, R_{fastrp})$$
 
 **Multi-hop Expansion:**
 $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
@@ -37,9 +45,9 @@ $$PPR(v; S) = (1-d) \cdot p_S(v) + d \cdot \sum_{u \to v} \frac{PPR(u; S)}{|out(
 where $S$ = seed entities, $d = 0.85$ (damping factor)
 
 **FastRP Structural Similarity:**
-$$FastRP(G) = \Phi(A^k \cdot R)$$
+$$FastRP(G) = D^r \cdot (D^{-1/2}AD^{-1/2})^k \cdot R$$
 
-where $A$ = adjacency matrix, $R$ = random projection, $k$ = iteration count
+where $A$ = adjacency matrix, $D$ = degree matrix, $R$ = random projection, $r$ = normalization strength
 
 ### 🧠 **Adaptive Entity Type Discovery**
 
@@ -48,9 +56,14 @@ where $A$ = adjacency matrix, $R$ = random projection, $k$ = iteration count
 
 ### ⚡ **Agentic Entity Canonicalization**
 
-* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
-* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication.
+* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision, especially when FastRP/PPR compute embeddings before entity merging.
+* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion** to ensure FastRP/PPR operate on cleaned entity graphs.
 * *Currently implemented for the NanoVectorDB backend.*
+
+**Enhanced Workflow:**
+1. **Document Processing**: Extract entities and relations from input documents
+2. **Entity Merging**: Automatically merge duplicate entities (if enabled)
+3. **FastRP/PPR Computation**: Compute embeddings on clean entity graph after merging
 
 **Mathematical Framework:**
 
@@ -93,14 +106,16 @@ async def main():
     )
     await rag.initialize_storages()
     
-    # Insert with automatic timestamp integration
+    # Insert with automatic timestamp integration and agentic merging
     await rag.insert(
         input=["Apple Q3 2024 earnings: iPhone revenue $39.3B, down 1.5% YoY..."],
         timestamps=["2024-Q3"],  # Auto-prefixed to descriptions
-        file_paths=["apple_q3_2024.pdf"]
+        file_paths=["apple_q3_2024.pdf"],
+        agentic_merging=True,           # Enable automatic entity merging
+        agentic_merging_threshold=0.8   # Similarity threshold for merging
     )
     
-    # Query with three-way parallel expansion
+    # Query with three-perspective expansion
     response = rag.query(
         "Apple iPhone revenue trends and supplier relationships",
         param=QueryParam(
@@ -111,15 +126,10 @@ async def main():
             top_fastrp_nodes=5      # Top FastRP structural entities
         )
     )
-    
-    # Run agentic entity merging (NanoVectorDB only)
-    result = await rag.aagentic_merging(threshold=0.8)
-    # Example: "Tim Cook" merged into "Timothy D. Cook" (similarity: 0.903)
 
 if __name__ == "__main__":
     asyncio.run(main())
 ```
-
 ---
 
 ## 🏗️ Workflow
@@ -129,12 +139,9 @@ if __name__ == "__main__":
 python entity_type_augmentation.py
 
 # 2. Insert documents with timestamps
-rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"])
+rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"], agentic_merging = True, agentic_merging_threshold = 0.8)
 
-# 3. Run agentic entity merging (NanoVectorDB only)
-result = await rag.agentic_merging(threshold=0.8)
-
-# 4. Query with three-way parallel expansion
+# 3. Query with three-perspective expansion
 response = rag.query(query, param=QueryParam(
     max_hop=2,           # Multi-hop traversal
     max_neighbors=30,    # Max neighbor per node
@@ -150,7 +157,7 @@ response = rag.query(query, param=QueryParam(
 KairosRAG extends **LightRAG** with:
 
 1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
-2. **Three-Way Parallel Expansion** – Multi-hop traversal, Personalized PageRank, and FastRP structural similarity operating independently.
+2. **Three-Perspective Expansion** – Multi-hop traversal, Personalized PageRank, and FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 
@@ -159,4 +166,4 @@ KairosRAG extends **LightRAG** with:
 ## 🙏 Acknowledgments
 
 KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License).
-We extend it with **time-awareness, three-way parallel expansion architecture, adaptive schema induction, and agentic entity management** using rigorous mathematical frameworks.
+We extend it with **time-awareness, three-perspective expansion architecture, adaptive schema induction, and agentic entity management** using rigorous mathematical frameworks.

@@ -1773,22 +1773,6 @@ async def merge_nodes_and_edges(
                         'description': edge_data.get('description', ''),
                         'keywords': edge_data.get('keywords', '')
                     })
-            
-            # Compute FastRP + PageRank embeddings (dual-path approach)
-            if entities_data and relations_data:
-                node_embedding = global_config.get("node_embedding")
-                if not node_embedding:
-                    logger.error("node_embedding not found in global_config during insertion")
-                else:
-                    # This computes and saves FastRP embeddings + PageRank scores for later use
-                    await node_embedding.compute_embeddings_during_insert(
-                        entities_data, relations_data, text_embeddings
-                    )
-                
-                # Update pipeline status
-                async with pipeline_status_lock:
-                    pipeline_status["latest_message"] = f"FastRP + PageRank computed for structural path expansion"
-                    pipeline_status["history_messages"].append(f"Node embedding computation completed")
                         
         except Exception as e:
             logger.error(f"Error computing enhanced embeddings: {e}")
