@@ -11,7 +11,7 @@ async def main():
         print("Initialization success!!")
 
         query = """
-        Does any tsmc information be mention from apple?
+        Please summarize the latest quarterly earnings report of Apple Inc.
         """
 
         # 將時間相關模糊問題進行 rewrite
@@ -37,7 +37,6 @@ async def main():
                 top_fastrp_nodes=5,     
                 user_prompt="""
                     Let's think step by step to answer the question
-
                     ## Step 1: Question Analysis
                     Break down what exactly is being asked and identify key components.
 
@@ -49,6 +48,25 @@ async def main():
 
                     ## Step 4: Answer Synthesis
                     Provide a comprehensive answer based on the reasoning above.
+
+                    ===
+                    
+                    You have to answer the question following the format below:
+                    ## <Title of the report>
+                    ### Overview
+                    <description: Provide a high-level summary, including scope, purpose, and context.>
+
+                    ### Key Themes
+                    <description: Extract the main recurring themes, announcements, priorities, challenges, and opportunities.>
+
+                    ### Comparative Insights
+                    <description: Highlight similarities, differences, shifts in tone, and evolving trends.>
+
+                    ### Actionable Insights
+                    <description: Summarize practical implications or recommendations (e.g., for strategy, investment, or risk management).>
+
+                    ### Reference
+                    <description: List ALL sources used>
                     """,
                 response_type="Single Paragraph",
                 only_need_context=False,
