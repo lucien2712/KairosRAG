@@ -82,3 +82,5 @@ input/
 note.txt
 lightrag/entity_types/
 GNN_ENHANCEMENT.md
+entity_merge.py
+backup/
