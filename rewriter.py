@@ -1,33 +1,37 @@
 
 from openai import OpenAI
-from utils import extract_json_from_response
+from utils import extract_json_from_response, get_current_time
 import os
+import config
 client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
 )
 
 # 使用 LLM 改寫 Query（將時間相關模糊詞換成精確時間）
 def rewriter(user_query: str) -> str:
+    # 獲取當前時間和季度
+    current_date, current_quarter = get_current_time()
+    
     prompt_system = """
-/no_think
 You are an expert in understanding vague queries and rewriting them with precise temporal references.
 Rewrite vague temporal terms such as "recent", "latest", "this quarter", "last quarter", "this year", etc., and replace them with precise time ranges or specific dates based on the provided context.
 
 Provide the output strictly in JSON format with the following structure:
-{{
+{
   "rewritten_query": "<rewritten query>"
-}}
+}
 
 Example:
 User Query: "What are the recent trends? The current date is **2023-10-17**, and we are currently in **Q4**"
 Expected Output:
-{{
+{
   "rewritten_query": "What are the trends from Q2 2023 to Q3 2023?"
-}}
+}
 """
 
     prompt_user = f"""
                     User Query: '{user_query}'
+                    The current date is **{current_date}**, and we are currently in **{current_quarter}**.
                     """
 
     response = client.chat.completions.create(
