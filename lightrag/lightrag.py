@@ -966,7 +966,7 @@ class LightRAG:
             # Flow 2: insert → agentic merging → FastRP & PPR
             logger.info(f"Starting agentic entity merging with threshold {agentic_merging_threshold}")
             merge_result = await self.aagentic_merging(threshold=agentic_merging_threshold)
-            logger.info(f"Agentic merging completed: {merge_result}")
+            logger.info(f"Agentic merging completed")
             
             # Compute FastRP and PPR after entity merging
             await self._compute_node_embeddings()
@@ -3042,6 +3042,7 @@ class LightRAG:
         import numpy as np
         import json
         import time as time_module
+        import hashlib
         from langchain_openai import ChatOpenAI
         from langchain_core.tools import tool
         from .prompt import PROMPTS
@@ -3049,6 +3050,18 @@ class LightRAG:
         
         start_time = time_module.time()
         print(f"Starting agentic entity merging with threshold={threshold}")
+        
+        # Load entity comparison cache
+        cache_file_path = os.path.join(self.working_dir, "entity_merge_cache.json")
+        entity_pair_cache = {}
+        if os.path.exists(cache_file_path):
+            try:
+                with open(cache_file_path, 'r', encoding='utf-8') as f:
+                    entity_pair_cache = json.load(f)
+                print(f"Loaded {len(entity_pair_cache)} cached entity pair comparisons")
+            except Exception as e:
+                print(f"Failed to load entity pair cache: {e}")
+                entity_pair_cache = {}
         
         # Initialize LLM (you may need to adjust this based on your setup)
         llm = ChatOpenAI(
@@ -3274,6 +3287,8 @@ class LightRAG:
         print(f"Starting LLM evaluation of candidate pairs...")
         merged_pairs = 0
         llm_evaluated_pairs = 0
+        cached_merges = 0
+        cached_skips = 0
         active_entities = set(range(len(entities)))  # Track which entities are still active
         
         for i, j, similarity in candidate_pairs:
@@ -3284,7 +3299,56 @@ class LightRAG:
             entity_a = entities[i]
             entity_b = entities[j]
             
-            # Prepare LLM prompt
+            # Create hash key for this entity pair based on content (not ID)
+            content_a = f"{entity_a['entity_id']}|{entity_a['description']}"
+            content_b = f"{entity_b['entity_id']}|{entity_b['description']}"
+            hash_a = hashlib.md5(content_a.encode('utf-8')).hexdigest()
+            hash_b = hashlib.md5(content_b.encode('utf-8')).hexdigest()
+            
+            # Create consistent pair key (sorted to ensure consistent ordering)
+            pair_key = f"{min(hash_a, hash_b)}_{max(hash_a, hash_b)}"
+            
+            # Check cache first
+            if pair_key in entity_pair_cache:
+                cached_result = entity_pair_cache[pair_key]
+                # Only show summary for cached pairs, not detailed logs
+                
+                if cached_result['decision'] == 'merged':
+                    cached_merges += 1
+                    # Apply cached merge decision silently
+                    try:
+                        # Temporarily suppress merge operation logs
+                        import logging
+                        merge_logger = logging.getLogger('lightrag.utils_graph')
+                        original_level = merge_logger.level
+                        merge_logger.setLevel(logging.CRITICAL)  # Suppress INFO logs
+                        
+                        self.merge_entities(
+                            source_entities=[entity_a['entity_id'], entity_b['entity_id']],
+                            target_entity=entity_a['entity_id'],
+                            merge_strategy={
+                                "created_at": "keep_last",
+                                "description": "concatenate",
+                                "entity_type": "keep_first",
+                                "source_id": "join_unique",
+                                "file_path": "join_unique",
+                            },
+                        )
+                        
+                        # Restore original log level
+                        merge_logger.setLevel(original_level)
+                        
+                        active_entities.discard(j)
+                        merged_pairs += 1
+                        # Don't print anything for cached merges
+                    except Exception as e:
+                        print(f"Failed to apply cached merge: {e}")
+                else:
+                    cached_skips += 1
+                # For 'skipped' decisions, we just continue to next pair (silently)
+                continue
+                
+            # Prepare LLM prompt for new evaluation
             user_prompt = (
                 "Determine whether the two entities are the same. "
                 "Only when you are over 95% confident that A and B refer to the SAME entity, "
@@ -3312,7 +3376,19 @@ class LightRAG:
                     # LLM decided to merge - mark entity B as inactive
                     active_entities.discard(j)
                     merged_pairs += 1
-                    print(f"Merged: {entity_a['entity_id']} <- {entity_b['entity_id']} (similarity: {similarity:.3f})")
+                    decision = "merged"
+                    print(f"NEW MERGE: {entity_a['entity_id']} <- {entity_b['entity_id']} (similarity: {similarity:.3f})")
+                else:
+                    decision = "skipped"
+                    
+                # Cache this decision
+                entity_pair_cache[pair_key] = {
+                    "decision": decision,
+                    "similarity": float(similarity),
+                    "timestamp": time_module.strftime("%Y-%m-%d %H:%M:%S"),
+                    "entity_a_id": entity_a['entity_id'],
+                    "entity_b_id": entity_b['entity_id']
+                }
                 
             except Exception as e:
                 print(f"Error processing pair ({entity_a['entity_id']}, {entity_b['entity_id']}): {str(e)}")
@@ -3320,15 +3396,28 @@ class LightRAG:
         
         processing_time = time_module.time() - start_time
         remaining_entities = len(active_entities)
+
+        
+        # Save updated cache to disk
+        try:
+            with open(cache_file_path, 'w', encoding='utf-8') as f:
+                json.dump(entity_pair_cache, f, ensure_ascii=False, indent=2)
+            # print(f"Saved {len(entity_pair_cache)} entity pair comparisons to cache")  # Remove this line
+        except Exception as e:
+            print(f"Failed to save entity pair cache: {e}")
         
         return {
             "total_entities": total_entities,
             "candidate_pairs": len(candidate_pairs),
             "llm_evaluated_pairs": llm_evaluated_pairs,
             "merged_pairs": merged_pairs,
+            "new_merges": merged_pairs - cached_merges,
+            "cached_merges": cached_merges,
+            "cached_skips": cached_skips,
             "remaining_entities": remaining_entities,
             "processing_time": processing_time,
-            "similarity_threshold": threshold
+            "similarity_threshold": threshold,
+            "total_cached_pairs": len(entity_pair_cache)
         }
 
     async def _compute_node_embeddings(self):
