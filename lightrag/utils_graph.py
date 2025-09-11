@@ -786,12 +786,12 @@ async def amerge_entities(
                 await chunk_entity_relation_graph.upsert_node(
                     target_entity, merged_entity_data
                 )
-                logger.info(f"Created new target entity '{target_entity}'")
+            
             else:
                 await chunk_entity_relation_graph.upsert_node(
                     target_entity, merged_entity_data
                 )
-                logger.info(f"Updated existing target entity '{target_entity}'")
+                
 
             # 6. Recreate all relationships, pointing to the target entity
             relation_updates = {}  # Track relationships that need to be merged
@@ -846,9 +846,7 @@ async def amerge_entities(
 
                 # Delete relationships records from vector database
                 await relationships_vdb.delete(relations_to_delete)
-                logger.info(
-                    f"Deleted {len(relations_to_delete)} relation records for entity from vector database"
-                )
+                
 
             # 7. Update entity vector representation
             description = merged_entity_data.get("description", "")
@@ -900,9 +898,6 @@ async def amerge_entities(
             # 9. Delete source entities
             for entity_name in source_entities:
                 if entity_name == target_entity:
-                    logger.info(
-                        f"Skipping deletion of '{entity_name}' as it's also the target entity"
-                    )
                     continue
 
                 # Delete entity node from knowledge graph
