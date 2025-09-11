@@ -36,7 +36,7 @@ from typing import Tuple, Dict, Any, List
 from openai import OpenAI
 
 try:
-    from utils import extract_json_from_response  # optional helper
+    from lightrag.small_tool import extract_json_from_response  # optional helper
 except Exception:
     def extract_json_from_response(text: str):
         """Fallback: extract the first JSON object from a string."""

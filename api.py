@@ -3,8 +3,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from config import initialize_rag
 from lightrag import QueryParam
-from rewriter import rewriter
-from utils import get_current_time
+from lightrag.rewriter import rewriter
+from lightrag.small_tool import get_current_time
 from contextlib import asynccontextmanager
 from fastapi_mcp import FastApiMCP
 import uvicorn

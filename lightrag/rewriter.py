@@ -1,6 +1,6 @@
 
 from openai import OpenAI
-from utils import extract_json_from_response, get_current_time
+from lightrag.small_tool import extract_json_from_response, get_current_time
 import os
 import config
 client = OpenAI(

@@ -4,7 +4,7 @@ import json
 import asyncio
 from config import initialize_rag
 from lightrag import QueryParam
-from utils import get_current_time
+from lightrag.small_tool import get_current_time
 
 file_path = "./rag_storage/kv_store_llm_response_cache.json"
 if os.path.exists(file_path):

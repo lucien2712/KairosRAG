@@ -1,6 +1,6 @@
 from config import initialize_rag
 from lightrag import QueryParam
-from rewriter import rewriter
+from lightrag.rewriter import rewriter
 
 
 async def main():
@@ -50,7 +50,7 @@ async def main():
                     Provide a comprehensive answer based on the reasoning above.
 
                     ===
-                    
+
                     You have to answer the question following the format below:
                     ## <Title of the report>
                     ### Overview
