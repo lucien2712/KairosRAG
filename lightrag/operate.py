@@ -2360,6 +2360,102 @@ async def _calculate_relevance_score(
     return final_score
 
 
+async def _sort_combined_chunks(
+    combined_chunks: list[dict],
+    chunk_type: str,  # "entity" or "relation"
+    query: str,
+    text_chunks_db: BaseKVStorage,
+    chunks_vdb: BaseVectorStorage,
+    query_param: QueryParam,
+    query_embedding = None,
+) -> list[dict]:
+    """Sort combined chunks (initial + expanded) using the same logic as initial chunks."""
+    
+    if not combined_chunks:
+        return []
+    
+    # Get configuration
+    kg_chunk_pick_method = text_chunks_db.global_config.get(
+        "kg_chunk_pick_method", DEFAULT_KG_CHUNK_PICK_METHOD
+    )
+    max_related_chunks = text_chunks_db.global_config.get(
+        "related_chunk_number", DEFAULT_RELATED_CHUNK_NUMBER
+    )
+    
+    # Step 1: Calculate chunk occurrence count
+    chunk_occurrence_count = {}
+    for chunk in combined_chunks:
+        chunk_id = chunk.get("chunk_id")
+        if chunk_id:
+            chunk_occurrence_count[chunk_id] = chunk_occurrence_count.get(chunk_id, 0) + 1
+    
+    # Step 2: Create mock entities_with_chunks structure for compatibility
+    mock_entities_with_chunks = [{
+        "chunks": [chunk.get("chunk_id") for chunk in combined_chunks if chunk.get("chunk_id")],
+        "sorted_chunks": []
+    }]
+    
+    # Sort by occurrence count first
+    mock_entities_with_chunks[0]["sorted_chunks"] = sorted(
+        mock_entities_with_chunks[0]["chunks"],
+        key=lambda chunk_id: chunk_occurrence_count.get(chunk_id, 0),
+        reverse=True
+    )
+    
+    # Step 3: Apply selection algorithm (VECTOR or WEIGHT)
+    selected_chunk_ids = []
+    total_chunks = len(mock_entities_with_chunks[0]["chunks"])
+    
+    if kg_chunk_pick_method == "VECTOR" and query and chunks_vdb:
+        num_of_chunks = int(max_related_chunks * len(mock_entities_with_chunks) / 2)
+        
+        # Get embedding function
+        embedding_func_config = text_chunks_db.embedding_func
+        if not embedding_func_config:
+            raise ValueError(f"No embedding function found for {chunk_type} chunks sorting with VECTOR method")
+        
+        actual_embedding_func = embedding_func_config.func
+        if not actual_embedding_func:
+            raise ValueError(f"Embedding function is None for {chunk_type} chunks sorting with VECTOR method")
+        
+        selected_chunk_ids = await pick_by_vector_similarity(
+            query=query,
+            text_chunks_storage=text_chunks_db,
+            chunks_vdb=chunks_vdb,
+            num_of_chunks=num_of_chunks,
+            entity_info=mock_entities_with_chunks,
+            embedding_func=actual_embedding_func,
+            query_embedding=query_embedding,
+        )
+        
+        if selected_chunk_ids == []:
+            raise RuntimeError(f"No {chunk_type} chunks selected by vector similarity - this should not happen with valid data")
+        
+        logger.info(f"Selected {len(selected_chunk_ids)} from {total_chunks} combined {chunk_type} chunks by vector similarity")
+    
+    if kg_chunk_pick_method == "WEIGHT":
+        selected_chunk_ids = pick_by_weighted_polling(
+            mock_entities_with_chunks, max_related_chunks, min_related_chunks=1
+        )
+        logger.info(f"Selected {len(selected_chunk_ids)} from {total_chunks} combined {chunk_type} chunks by weighted polling")
+    
+    # Step 4: Reorder combined_chunks based on selected_chunk_ids
+    if not selected_chunk_ids:
+        return []
+    
+    # Create a mapping from chunk_id to chunk
+    chunk_id_to_chunk = {chunk.get("chunk_id"): chunk for chunk in combined_chunks if chunk.get("chunk_id")}
+    
+    # Reorder chunks based on selection
+    sorted_chunks = []
+    for chunk_id in selected_chunk_ids:
+        if chunk_id in chunk_id_to_chunk:
+            sorted_chunks.append(chunk_id_to_chunk[chunk_id])
+    
+    logger.info(f"Combined {chunk_type} chunks sorting completed: {len(sorted_chunks)} chunks in final order")
+    return sorted_chunks
+
+
 def _calculate_relevance_scores_vectorized(
     candidates: list[dict],
     nodes_data: list[dict],
@@ -4214,19 +4310,31 @@ async def _build_query_context(
         # Combine relation chunks: initial + expanded, then re-sort  
         combined_relation_chunks = initial_chunks["relation_chunks"] + expanded_relation_chunks
         
-        # Re-sort combined chunks using the original sorting approach
-        # For entity chunks, apply the same sorting logic used for initial entity chunks
+        # Re-sort combined chunks using the same sorting logic as initial chunks
+        # Sort entity chunks: initial + expanded together using occurrence count + VECTOR/WEIGHT methods
         if combined_entity_chunks:
-            # Apply the original entity chunk sorting (by relevance/similarity)
-            # The original chunks were already sorted, so we maintain that order for initial chunks
-            # and sort expanded chunks to integrate properly
-            pass  # Entity chunks maintain their original order for now
+            logger.debug(f"Sorting combined entity chunks: {len(combined_entity_chunks)} total chunks")
+            combined_entity_chunks = await _sort_combined_chunks(
+                combined_entity_chunks,
+                chunk_type="entity",
+                query=query,
+                text_chunks_db=text_chunks_db,
+                chunks_vdb=chunks_vdb,
+                query_param=query_param,
+                query_embedding=query_embedding,
+            )
             
         if combined_relation_chunks:
-            # Apply the original relation chunk sorting (by relevance/similarity)  
-            # The original chunks were already sorted, so we maintain that order for initial chunks
-            # and sort expanded chunks to integrate properly
-            pass  # Relation chunks maintain their original order for now
+            logger.debug(f"Sorting combined relation chunks: {len(combined_relation_chunks)} total chunks")
+            combined_relation_chunks = await _sort_combined_chunks(
+                combined_relation_chunks,
+                chunk_type="relation", 
+                query=query,
+                text_chunks_db=text_chunks_db,
+                chunks_vdb=chunks_vdb,
+                query_param=query_param,
+                query_embedding=query_embedding,
+            )
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations")
         logger.info(f"Combined chunks: Entity: {len(combined_entity_chunks)}, Relation: {len(combined_relation_chunks)}")
@@ -4822,73 +4930,19 @@ async def _find_related_text_unit_from_entities(
         # Update entity's chunks to deduplicated chunks
         entity_info["chunks"] = deduplicated_chunks
 
-    # Step 3: Sort chunks for each entity by occurrence count (higher count = higher priority)
+    # Step 3: Skip sorting at initial stage - will be handled at combined stage
     total_entity_chunks = 0
     for entity_info in entities_with_chunks:
-        sorted_chunks = sorted(
-            entity_info["chunks"],
-            key=lambda chunk_id: chunk_occurrence_count.get(chunk_id, 0),
-            reverse=True,
-        )
-        entity_info["sorted_chunks"] = sorted_chunks
-        total_entity_chunks += len(sorted_chunks)
+        # Just use chunks as-is without sorting
+        entity_info["sorted_chunks"] = entity_info["chunks"]
+        total_entity_chunks += len(entity_info["chunks"])
 
-    selected_chunk_ids = []  # Initialize to avoid UnboundLocalError
+    # Step 4: Return all chunk_ids without complex selection - combined stage will handle sorting
+    selected_chunk_ids = []
+    for entity_info in entities_with_chunks:
+        selected_chunk_ids.extend(entity_info["chunks"])
 
-    # Step 4: Apply the selected chunk selection algorithm
-    # Pick by vector similarity:
-    #     The order of text chunks aligns with the naive retrieval's destination.
-    #     When reranking is disabled, the text chunks delivered to the LLM tend to favor naive retrieval.
-    if kg_chunk_pick_method == "VECTOR" and query and chunks_vdb:
-        num_of_chunks = int(max_related_chunks * len(entities_with_chunks) / 2)
-
-        # Get embedding function from global config
-        embedding_func_config = text_chunks_db.embedding_func
-        if not embedding_func_config:
-            logger.warning("No embedding function found, falling back to WEIGHT method")
-            kg_chunk_pick_method = "WEIGHT"
-        else:
-            try:
-                actual_embedding_func = embedding_func_config.func
-
-                selected_chunk_ids = None
-                if actual_embedding_func:
-                    selected_chunk_ids = await pick_by_vector_similarity(
-                        query=query,
-                        text_chunks_storage=text_chunks_db,
-                        chunks_vdb=chunks_vdb,
-                        num_of_chunks=num_of_chunks,
-                        entity_info=entities_with_chunks,
-                        embedding_func=actual_embedding_func,
-                        query_embedding=query_embedding,
-                    )
-
-                if selected_chunk_ids == []:
-                    kg_chunk_pick_method = "WEIGHT"
-                    logger.warning(
-                        "No entity-related chunks selected by vector similarity, falling back to WEIGHT method"
-                    )
-                else:
-                    logger.info(
-                        f"Selecting {len(selected_chunk_ids)} from {total_entity_chunks} entity-related chunks by vector similarity"
-                    )
-
-            except Exception as e:
-                logger.error(
-                    f"Error in vector similarity sorting: {e}, falling back to WEIGHT method"
-                )
-                kg_chunk_pick_method = "WEIGHT"
-
-    if kg_chunk_pick_method == "WEIGHT":
-        # Pick by entity and chunk weight:
-        #     When reranking is disabled, delivered more solely KG related chunks to the LLM
-        selected_chunk_ids = pick_by_weighted_polling(
-            entities_with_chunks, max_related_chunks, min_related_chunks=1
-        )
-
-        logger.info(
-            f"Selecting {len(selected_chunk_ids)} from {total_entity_chunks} entity-related chunks by weighted polling"
-        )
+    logger.info(f"Collected {len(selected_chunk_ids)} entity-related chunks (sorting deferred to combined stage)")
 
     if not selected_chunk_ids:
         return []
@@ -5114,72 +5168,23 @@ async def _find_related_text_unit_from_relations(
         )
         return []
 
-    # Step 3: Sort chunks for each relationship by occurrence count (higher count = higher priority)
+    # Step 3: Skip sorting at initial stage - will be handled at combined stage
     total_relation_chunks = 0
     for relation_info in relations_with_chunks:
-        sorted_chunks = sorted(
-            relation_info["chunks"],
-            key=lambda chunk_id: chunk_occurrence_count.get(chunk_id, 0),
-            reverse=True,
-        )
-        relation_info["sorted_chunks"] = sorted_chunks
-        total_relation_chunks += len(sorted_chunks)
+        # Just use chunks as-is without sorting
+        relation_info["sorted_chunks"] = relation_info["chunks"]
+        total_relation_chunks += len(relation_info["chunks"])
 
     logger.info(
         f"Find {total_relation_chunks} additional chunks in {len(relations_with_chunks)} relations ({len(removed_entity_chunk_ids)} duplicated chunks removed)"
     )
 
-    # Step 4: Apply the selected chunk selection algorithm
-    selected_chunk_ids = []  # Initialize to avoid UnboundLocalError
+    # Step 4: Return all chunk_ids without complex selection - combined stage will handle sorting
+    selected_chunk_ids = []
+    for relation_info in relations_with_chunks:
+        selected_chunk_ids.extend(relation_info["chunks"])
 
-    if kg_chunk_pick_method == "VECTOR" and query and chunks_vdb:
-        num_of_chunks = int(max_related_chunks * len(relations_with_chunks) / 2)
-
-        # Get embedding function from global config
-        embedding_func_config = text_chunks_db.embedding_func
-        if not embedding_func_config:
-            logger.warning("No embedding function found, falling back to WEIGHT method")
-            kg_chunk_pick_method = "WEIGHT"
-        else:
-            try:
-                actual_embedding_func = embedding_func_config.func
-
-                if actual_embedding_func:
-                    selected_chunk_ids = await pick_by_vector_similarity(
-                        query=query,
-                        text_chunks_storage=text_chunks_db,
-                        chunks_vdb=chunks_vdb,
-                        num_of_chunks=num_of_chunks,
-                        entity_info=relations_with_chunks,
-                        embedding_func=actual_embedding_func,
-                        query_embedding=query_embedding,
-                    )
-
-                if selected_chunk_ids == []:
-                    kg_chunk_pick_method = "WEIGHT"
-                    logger.warning(
-                        "No relation-related chunks selected by vector similarity, falling back to WEIGHT method"
-                    )
-                else:
-                    logger.info(
-                        f"Selecting {len(selected_chunk_ids)} from {total_relation_chunks} relation-related chunks by vector similarity"
-                    )
-
-            except Exception as e:
-                logger.error(
-                    f"Error in vector similarity sorting: {e}, falling back to WEIGHT method"
-                )
-                kg_chunk_pick_method = "WEIGHT"
-
-    if kg_chunk_pick_method == "WEIGHT":
-        # Apply linear gradient weighted polling algorithm
-        selected_chunk_ids = pick_by_weighted_polling(
-            relations_with_chunks, max_related_chunks, min_related_chunks=1
-        )
-
-        logger.info(
-            f"Selecting {len(selected_chunk_ids)} from {total_relation_chunks} relation-related chunks by weighted polling"
-        )
+    logger.info(f"Collected {len(selected_chunk_ids)} relation-related chunks (sorting deferred to combined stage)")
 
     logger.debug(
         f"KG related chunks: {len(entity_chunks)} from entitys, {len(selected_chunk_ids)} from relations"
