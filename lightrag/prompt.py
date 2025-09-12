@@ -397,3 +397,111 @@ A.description = A technology company known for designing and manufacturing consu
 
 B.entity_id = TSMC
 B.description = Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry."""
+
+# Entity Type Augmentation Prompts
+PROMPTS["entity_type_suggestion_system"] = """
+You are an expert in Named Entity Recognition (NER). Your goal is to analyze the connections and relations between existing entity types and document content to provide meaningful refinements or additions.
+
+## Task Requirements:
+- Avoid suggesting "other" or "unknown" types
+- Do not suggest duplicates or overlapping entity types  
+- Prioritize quality over quantity
+- Provide concise yet clear explanations
+- Respond in strict JSON array format only
+
+## Response Format:
+[
+{
+    "entity_type": "<entity_type_name>",
+    "explanation": "<detailed_explanation>"
+}
+]
+
+## Example:
+### Current Entity Types:
+[
+    {
+        "entity_type": "person",
+        "explanation": "An entity representing individual persons."
+    },
+    {
+        "entity_type": "temporal_range",
+        "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July')."
+    }
+]
+## Document Content:
+Apple Inc. was founded in 1976. After that, it became one of the most successful companies in the world.
+
+
+### Suggested New Entity Types:
+[
+    {
+        "entity_type": "organization",
+        "explanation": "An entity representing organizations, companies, or institutions."
+    }
+]
+"""
+
+PROMPTS["entity_type_suggestion_user"] = """
+## Current Entity Types:
+{current_entity_types}
+
+## Task:
+Based on the following document content, analyze and suggest new entity types with explanations if needed.
+
+## Document Content:
+{file_content}
+
+Please carefully analyze the entities that appear in the document and suggest appropriate new entity types (if any are needed).
+"""
+
+PROMPTS["entity_type_refinement_system"] = """
+You are an advanced linguistic assistant with expertise in Named Entity Recognition (NER).
+
+## Task:
+Refine a list of entity types by removing duplicates or semantically overlapping types.
+
+## Requirements:
+- Ensure each type is distinct, meaningful, and concise
+- Remove redundant or overlapping entity types
+- Keep the most comprehensive and well-defined entity type when merging similar ones
+- Maintain clear and accurate explanations
+- Return the refined list in strict JSON array format only
+
+## Response Format:
+[
+{
+    "entity_type": "<entity_type_name>",
+    "explanation": "<clear_explanation>"
+}
+]
+
+## Example:
+### Entity Types List to Refine:
+[
+    {
+        "entity_type": "Company",
+        "explanation": "A company is a legal entity formed by a group of individuals or entities to engage in business activities."
+    },
+    {
+        "entity_type": "Organization", 
+        "explanation": "An organization is a group of individuals or entities that work together to achieve a common goal."
+    }
+]
+
+### Refined List:
+[
+    {
+        "entity_type": "Organization",
+        "explanation": "An organization is a group of individuals or entities that work together to achieve a common goal."
+    }
+]
+"""
+
+PROMPTS["entity_type_refinement_user"] = """
+## Entity Types List to Refine:
+{entity_types}
+
+## Task:
+Please refine this list by removing duplicates or semantically similar entity types. Keep the most appropriate and comprehensive entity type when consolidating similar ones.
+"""

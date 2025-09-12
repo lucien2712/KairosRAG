@@ -24,38 +24,19 @@ DEFAULT_SUMMARY_LENGTH_RECOMMENDED = 600
 DEFAULT_SUMMARY_CONTEXT_SIZE = 12000
 # Default entities to extract if ENTITY_TYPES is not specified in .env
 
-import os
-import json
-
-def load_entity_types():
-    """Load entity types from entity_types/entity_type.json file."""
-    # Use the specific path that works
-    path = os.path.join("lightrag", "entity_types", "entity_type.json")  # From root directory with lightrag folder
-    if os.path.exists(path):
-        
-        with open(path, "r", encoding="utf-8") as f:
-            entity_data = json.load(f)
-        # Extract entity_type values from the JSON structure
-        if isinstance(entity_data, list) and len(entity_data) > 0:
-                return [item["entity_type"] for item in entity_data]
-
-    # Fallback to default if file doesn't exist
-    print(f"Warning: entity_type.json not found at {path}, using default entity types")
-    return [
-        "Organization",
-        "Person",
-        "Location",
-        "Event",
-        "Technology",
-        "Equipment",
-        "Product",
-        "Document",
-        "Category",
-        "temporal_range"
-    ]
-
-DEFAULT_ENTITY_TYPES = load_entity_types()
-# print(DEFAULT_ENTITY_TYPES)
+# Default entity types - used as fallback when no custom types are available
+DEFAULT_ENTITY_TYPES = [
+    "Organization",
+    "Person", 
+    "Location",
+    "Event",
+    "Technology",
+    "Equipment",
+    "Product",
+    "Document",
+    "Category",
+    "temporal_range"
+]
 # Separator for graph fields
 GRAPH_FIELD_SEP = "<SEP>"
 

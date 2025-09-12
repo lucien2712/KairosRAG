@@ -106,6 +106,9 @@ async def main():
     )
     await rag.initialize_storages()
     
+    # Adaptive entity type discovery
+    rag.entity_type_aug("path")
+
     # Insert with automatic timestamp integration and agentic merging
     await rag.insert(
         input=["Apple Q3 2024 earnings: iPhone revenue $39.3B, down 1.5% YoY..."],
@@ -136,7 +139,7 @@ if __name__ == "__main__":
 
 ```bash
 # 1. Discover entity types for your domain
-python entity_type_augmentation.py
+rag.entity_type_aug("path")
 
 # 2. Insert documents with timestamps
 rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"], agentic_merging = True, agentic_merging_threshold = 0.8)

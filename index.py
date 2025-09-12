@@ -53,7 +53,9 @@ async def main():
         print("Initialization success")
 
         # 讀取 PDF 並建立索引
-        texts, file_paths, fiscal_years = process_files_to_list("./inputs")
+        path = "./inputs"
+        result = rag.entity_type_aug(path)
+        texts, file_paths, fiscal_years = process_files_to_list(path)
 
         if texts:
             rag.insert(texts, file_paths=file_paths, timestamps=fiscal_years, agentic_merging=True, agentic_merging_threshold=0.8)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import traceback
 import asyncio
 import configparser
+import json
 import os
 import time
 import warnings
@@ -3474,3 +3475,452 @@ class LightRAG:
         except Exception as e:
             logger.error(f"Error computing node embeddings after insertion: {e}")
             # Don't raise the error to avoid breaking the insert process
+
+    # Entity Type Augmentation Methods
+    def entity_type_aug(self, input_folder: str = None, force_refresh: bool = False) -> dict:
+        """Synchronously augment entity types by analyzing documents.
+        
+        This method analyzes documents to discover new entity types using LLM,
+        then automatically reloads the updated entity types for use in future operations.
+        
+        Args:
+            input_folder: Optional folder containing .txt files to analyze.
+                         If None, uses documents from text_chunks_db.
+            force_refresh: Whether to reprocess already processed files.
+            
+        Returns:
+            dict: Results containing new and refined entity types.
+        """
+        loop = always_get_an_event_loop()
+        return loop.run_until_complete(
+            self.aentity_type_aug(input_folder, force_refresh)
+        )
+
+    async def aentity_type_aug(self, input_folder: str = None, force_refresh: bool = False) -> dict:
+        """Asynchronously augment entity types by analyzing documents.
+        
+        This method analyzes documents to discover new entity types using LLM,
+        then automatically reloads the updated entity types for use in future operations.
+        
+        Args:
+            input_folder: Optional folder containing .txt files to analyze.
+                         If None, uses documents from text_chunks_db.
+            force_refresh: Whether to reprocess already processed files.
+            
+        Returns:
+            dict: Results containing new and refined entity types.
+        """
+        logger.info("Starting entity type augmentation process")
+        
+        try:
+            # Step 1: Load existing entity types from working_dir
+            current_entity_types = self._load_existing_entity_types()
+            logger.info(f"Loaded {len(current_entity_types)} existing entity types")
+            
+            # Step 2: Get documents to process
+            if input_folder:
+                file_text_pairs = self._process_files_from_folder(input_folder, force_refresh)
+            else:
+                file_text_pairs = await self._process_files_from_chunks_db(force_refresh)
+                
+            if not file_text_pairs:
+                logger.info("No new files to process")
+                return {
+                    "status": "success",
+                    "message": "No new files to process",
+                    "existing_entity_types": len(current_entity_types),
+                    "new_entity_types": 0,
+                    "total_entity_types": len(current_entity_types)
+                }
+                
+            logger.info(f"Processing {len(file_text_pairs)} documents for entity type augmentation")
+            
+            # Step 3: Process files with LLM to suggest new entity types
+            all_new_entity_types = []
+            processed_count = 0
+            
+            for file_name, text_content in file_text_pairs:
+                logger.info(f"Processing file: {file_name}")
+                new_entity_types = await self._process_file_with_llm(text_content, current_entity_types)
+                all_new_entity_types.extend(new_entity_types)
+                processed_count += 1
+                logger.info(f"Processed {processed_count}/{len(file_text_pairs)} files")
+            
+            # Step 4: Combine and refine entity types
+            combined_entity_types = current_entity_types + all_new_entity_types
+            logger.info(f"Combined {len(current_entity_types)} existing + {len(all_new_entity_types)} new = {len(combined_entity_types)} total entity types")
+            
+            # Step 5: Use LLM to remove duplicates and similar types
+            refined_entity_types = await self._refine_entity_types(combined_entity_types)
+            
+            # Step 6: Save refined entity types
+            self._save_entity_types(refined_entity_types)
+            
+            # Step 7: Update processing status
+            self._update_processing_status(file_text_pairs)
+            
+            # Step 8: Reload entity types into addon_params for immediate use
+            self._update_entity_types_from_working_dir()
+            
+            logger.info(f"Entity type augmentation completed: {len(refined_entity_types)} total entity types")
+            logger.info("Entity types have been automatically reloaded for immediate use")
+            
+            return {
+                "status": "success",
+                "message": "Entity type augmentation completed successfully",
+                "existing_entity_types": len(current_entity_types),
+                "suggested_new_types": len(all_new_entity_types),
+                "final_entity_types": len(refined_entity_types),
+                "processed_files": len(file_text_pairs),
+                "entity_types": refined_entity_types
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in entity type augmentation: {e}")
+            return {
+                "status": "error",
+                "message": f"Entity type augmentation failed: {str(e)}",
+                "existing_entity_types": 0,
+                "new_entity_types": 0,
+                "total_entity_types": 0
+            }
+
+    def _load_existing_entity_types(self) -> list:
+        """Load existing entity types from working_dir."""
+        entity_type_path = os.path.join(self.working_dir, "entity_types.json")
+        if os.path.exists(entity_type_path):
+            try:
+                with open(entity_type_path, "r", encoding="utf-8") as f:
+                    entity_types = json.load(f)
+                logger.info(f"Loaded {len(entity_types)} entity types from {entity_type_path}")
+                return entity_types
+            except Exception as e:
+                logger.warning(f"Failed to load entity types from {entity_type_path}: {e}")
+        
+        # Return default entity types if file doesn't exist or fails to load
+        default_entity_types = [
+            {
+                "entity_type": "Organization",
+                "explanation": "An entity representing organizations, companies, or institutions."
+            },
+            {
+                "entity_type": "Person",
+                "explanation": "An entity representing individual persons."
+            },
+            {
+                "entity_type": "Location",
+                "explanation": "An entity representing geographical locations."
+            },
+            {
+                "entity_type": "Event",
+                "explanation": "An entity representing events or activities."
+            },
+            {
+                "entity_type": "Technology",
+                "explanation": "An entity representing technological concepts, tools, or innovations."
+            },
+            {
+                "entity_type": "Equipment",
+                "explanation": "An entity representing equipment, machinery, or devices."
+            },
+            {
+                "entity_type": "Product",
+                "explanation": "An entity representing products, goods, or services."
+            },
+            {
+                "entity_type": "Document",
+                "explanation": "An entity representing documents, reports, or written materials."
+            },
+            {
+                "entity_type": "Category",
+                "explanation": "An entity representing general categories or classifications."
+            },
+            {
+                "entity_type": "temporal_range",
+                "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July')."
+            }
+        ]
+        logger.info(f"Using default entity types: {len(default_entity_types)} types")
+        return default_entity_types
+
+    def _save_entity_types(self, entity_types: list):
+        """Save entity types to working_dir."""
+        entity_type_path = os.path.join(self.working_dir, "entity_types.json")
+        try:
+            with open(entity_type_path, "w", encoding="utf-8") as f:
+                json.dump(entity_types, f, ensure_ascii=False, indent=2)
+            logger.info(f"Saved {len(entity_types)} entity types to {entity_type_path}")
+        except Exception as e:
+            logger.error(f"Failed to save entity types to {entity_type_path}: {e}")
+            raise
+
+    def _load_processing_status(self) -> dict:
+        """Load file processing status from working_dir."""
+        status_path = os.path.join(self.working_dir, "entity_check_status.json")
+        if os.path.exists(status_path):
+            try:
+                with open(status_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load processing status from {status_path}: {e}")
+        return {}
+
+    def _save_processing_status(self, status: dict):
+        """Save file processing status to working_dir."""
+        status_path = os.path.join(self.working_dir, "entity_check_status.json")
+        try:
+            with open(status_path, "w", encoding="utf-8") as f:
+                json.dump(status, f, ensure_ascii=False, indent=2)
+            logger.info(f"Saved processing status for {len(status)} files to {status_path}")
+        except Exception as e:
+            logger.error(f"Failed to save processing status to {status_path}: {e}")
+            raise
+
+    def _update_processing_status(self, file_text_pairs: list):
+        """Update processing status for processed files."""
+        status = self._load_processing_status()
+        for file_name, _ in file_text_pairs:
+            status[file_name] = True
+        self._save_processing_status(status)
+
+    def _process_files_from_folder(self, folder_path: str, force_refresh: bool = False) -> list:
+        """Process files from a specified folder."""
+        if not os.path.exists(folder_path):
+            logger.warning(f"Folder {folder_path} does not exist")
+            return []
+
+        processed_files = self._load_processing_status() if not force_refresh else {}
+        file_text_pairs = []
+
+        try:
+            all_files = [f for f in os.listdir(folder_path) if f.endswith(".txt")]
+            logger.info(f"Found {len(all_files)} .txt files in {folder_path}")
+
+            for file_name in all_files:
+                if not force_refresh and file_name in processed_files:
+                    logger.debug(f"Skipped: {file_name} (already processed)")
+                    continue
+
+                file_path = os.path.join(folder_path, file_name)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        text_content = f.read()
+                    
+                    if text_content.strip():  # Only add non-empty files
+                        file_text_pairs.append((file_name, text_content))
+                        logger.info(f"Added file: {file_name}")
+                    else:
+                        logger.warning(f"Skipped empty file: {file_name}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to read {file_name}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error processing folder {folder_path}: {e}")
+
+        logger.info(f"Selected {len(file_text_pairs)} files for processing")
+        return file_text_pairs
+
+    async def _process_files_from_chunks_db(self, force_refresh: bool = False) -> list:
+        """Process files from the text_chunks_db storage."""
+        try:
+            # Get all chunk data from storage
+            logger.info("Retrieving documents from text_chunks_db")
+            
+            # Access the storage to get all documents
+            all_chunk_keys = []
+            try:
+                # Try to get all keys from the storage
+                if hasattr(self.text_chunks_db, 'get_all_keys'):
+                    all_chunk_keys = await self.text_chunks_db.get_all_keys()
+                elif hasattr(self.text_chunks_db, '_client'):
+                    # For some storage implementations, we might need to access the client directly
+                    client = await self.text_chunks_db._get_client()
+                    if hasattr(client, 'keys'):
+                        all_chunk_keys = list(client.keys())
+                else:
+                    logger.warning("Cannot retrieve all keys from text_chunks_db - method not supported")
+                    return []
+                    
+            except Exception as e:
+                logger.warning(f"Could not retrieve all keys from text_chunks_db: {e}")
+                return []
+
+            if not all_chunk_keys:
+                logger.info("No documents found in text_chunks_db")
+                return []
+
+            logger.info(f"Found {len(all_chunk_keys)} chunks in text_chunks_db")
+
+            processed_files = self._load_processing_status() if not force_refresh else {}
+            file_content_map = {}
+
+            # Group chunks by file_path
+            for chunk_key in all_chunk_keys:
+                try:
+                    chunk_data = await self.text_chunks_db.get_by_id(chunk_key)
+                    if chunk_data and 'content' in chunk_data:
+                        # Use full_doc_id or chunk_key as file identifier
+                        file_id = chunk_data.get('full_doc_id', chunk_key)
+                        
+                        if not force_refresh and file_id in processed_files:
+                            continue
+                            
+                        if file_id not in file_content_map:
+                            file_content_map[file_id] = []
+                        
+                        file_content_map[file_id].append(chunk_data['content'])
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to process chunk {chunk_key}: {e}")
+                    continue
+
+            # Combine chunks for each file
+            file_text_pairs = []
+            for file_id, contents in file_content_map.items():
+                combined_content = "\n\n".join(contents)
+                if combined_content.strip():
+                    file_text_pairs.append((file_id, combined_content))
+
+            logger.info(f"Prepared {len(file_text_pairs)} document groups for entity type analysis")
+            return file_text_pairs
+
+        except Exception as e:
+            logger.error(f"Error processing files from chunks_db: {e}")
+            return []
+
+    def _create_openai_client(self):
+        """Create OpenAI client using environment variable."""
+        try:
+            import openai
+            return openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+        except ImportError:
+            raise ImportError("Please install openai package: pip install openai")
+        except KeyError:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+    async def _process_file_with_llm(self, file_content: str, current_entity_types: list) -> list:
+        """Process a file with LLM to suggest new entity types."""
+        try:
+            from .prompt import PROMPTS
+            
+            client = self._create_openai_client()
+            current_entity_types_json = json.dumps(
+                [et["entity_type"] for et in current_entity_types]
+            )
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": PROMPTS["entity_type_suggestion_system"],
+                    },
+                    {
+                        "role": "user",
+                        "content": PROMPTS["entity_type_suggestion_user"].format(
+                            current_entity_types=current_entity_types_json,
+                            file_content=file_content
+                        ),
+                    },
+                ],
+            )
+            
+            llm_response = response.choices[0].message.content
+            suggested_types = self._extract_json_from_response(llm_response)
+            logger.info(f"LLM suggested {len(suggested_types) if suggested_types else 0} new entity types")
+            return suggested_types if suggested_types else []
+            
+        except Exception as e:
+            logger.error(f"Error processing file with LLM: {e}")
+            return []
+
+    async def _refine_entity_types(self, entity_types: list) -> list:
+        """Use LLM to remove duplicates and refine entity types."""
+        try:
+            from .prompt import PROMPTS
+            
+            client = self._create_openai_client()
+            
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": PROMPTS["entity_type_refinement_system"],
+                    },
+                    {
+                        "role": "user",
+                        "content": PROMPTS["entity_type_refinement_user"].format(
+                            entity_types=json.dumps(entity_types, ensure_ascii=False, indent=2)
+                        ),
+                    },
+                ],
+            )
+            
+            response_content = response.choices[0].message.content
+            refined_entity_types = self._extract_json_from_response(response_content)
+            
+            if refined_entity_types:
+                logger.info(f"LLM refined {len(entity_types)} entity types down to {len(refined_entity_types)}")
+                return refined_entity_types
+            else:
+                logger.warning("LLM refinement failed, returning original entity types")
+                return entity_types
+                
+        except Exception as e:
+            logger.error(f"Error refining entity types with LLM: {e}")
+            return entity_types
+
+    def _extract_json_from_response(self, response_content: str) -> list:
+        """Extract JSON from LLM response."""
+        try:
+            json_start = (
+                response_content.find("[")
+                if "[" in response_content
+                else response_content.find("{")
+            )
+            json_end = (
+                response_content.rfind("]") + 1
+                if "]" in response_content
+                else response_content.rfind("}") + 1
+            )
+            
+            if json_start != -1 and json_end != -1:
+                json_str = response_content[json_start:json_end]
+                logger.debug(f"Extracted JSON string: {json_str[:200]}...")
+                return json.loads(json_str)
+                
+            logger.warning("No valid JSON found in LLM response")
+            return []
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            return []
+        except Exception as e:
+            logger.error(f"Unexpected error extracting JSON: {e}")
+            return []
+
+    def _update_entity_types_from_working_dir(self):
+        """Update entity_types in addon_params from working_dir if available."""
+        entity_type_path = os.path.join(self.working_dir, "entity_types.json")
+        if os.path.exists(entity_type_path):
+            try:
+                with open(entity_type_path, "r", encoding="utf-8") as f:
+                    entity_types_data = json.load(f)
+                
+                # Extract just the entity_type names for addon_params
+                if entity_types_data and isinstance(entity_types_data, list):
+                    entity_type_names = [et.get("entity_type", "") for et in entity_types_data if et.get("entity_type")]
+                    if entity_type_names:
+                        # Update the addon_params with our entity types
+                        self.addon_params["entity_types"] = entity_type_names
+                        logger.info(f"Updated entity_types from working_dir: {len(entity_type_names)} types loaded")
+                        logger.debug(f"Entity types: {entity_type_names}")
+                        return
+                        
+            except Exception as e:
+                logger.warning(f"Failed to load entity types from {entity_type_path}: {e}")
+        
+        # If file doesn't exist or loading failed, keep the default entity types from constants.py
+        logger.info("Using default entity types from constants.py")
