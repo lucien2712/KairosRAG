@@ -1,5 +1,0 @@
-pypdf
-httpx
-nest_asyncio
-langchain_openai
-fastapi

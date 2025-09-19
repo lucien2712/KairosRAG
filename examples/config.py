@@ -7,7 +7,7 @@ from lightrag.utils import setup_logger, EmbeddingFunc
 import nest_asyncio
 nest_asyncio.apply()
 
-os.environ["OPENAI_API_KEY"] = "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"
+os.environ["OPENAI_API_KEY"] = ""
 
 setup_logger("lightrag", level="INFO")
 
