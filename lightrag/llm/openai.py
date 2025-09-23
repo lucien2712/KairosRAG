@@ -4,9 +4,10 @@ import os
 import logging
 
 if sys.version_info < (3, 9):
-    from typing import AsyncIterator
+    from typing import AsyncIterator, Optional
 else:
     from collections.abc import AsyncIterator
+    from typing import Optional
 import pipmaster as pm  # Pipmaster for dynamic library install
 
 # install specific modules
@@ -52,9 +53,9 @@ class InvalidResponseError(Exception):
 
 
 def create_openai_async_client(
-    api_key: str | None = None,
-    base_url: str | None = None,
-    client_configs: dict[str, Any] = None,
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    client_configs: Optional[dict[str, Any]] = None,
 ) -> AsyncOpenAI:
     """Create an AsyncOpenAI client with the given configuration.
 
@@ -109,11 +110,11 @@ def create_openai_async_client(
 async def openai_complete_if_cache(
     model: str,
     prompt: str,
-    system_prompt: str | None = None,
-    history_messages: list[dict[str, Any]] | None = None,
-    base_url: str | None = None,
-    api_key: str | None = None,
-    token_tracker: Any | None = None,
+    system_prompt: Optional[str] = None,
+    history_messages: Optional[list[dict[str, Any]]] = None,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    token_tracker: Optional[Any] = None,
     **kwargs: Any,
 ) -> str:
     """Complete a prompt using OpenAI's API with caching support.
@@ -410,6 +411,25 @@ async def gpt_4o_mini_complete(
         **kwargs,
     )
 
+async def gpt_5_complete(
+    prompt,
+    system_prompt=None,
+    history_messages=None,
+    keyword_extraction=False,
+    **kwargs,
+) -> str:
+    if history_messages is None:
+        history_messages = []
+    keyword_extraction = kwargs.pop("keyword_extraction", None)
+    if keyword_extraction:
+        kwargs["response_format"] = GPTKeywordExtractionFormat
+    return await openai_complete_if_cache(
+        "gpt-5",
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        **kwargs,
+    )
 
 async def nvidia_openai_complete(
     prompt,
@@ -444,7 +464,7 @@ async def nvidia_openai_complete(
 )
 async def openai_embed(
     texts: list[str],
-    model: str = "text-embedding-3-small",
+    model: str = "text-embedding-3-large",
     base_url: str = None,
     api_key: str = None,
     client_configs: dict[str, Any] = None,

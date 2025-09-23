@@ -4208,14 +4208,75 @@ async def _build_query_context(
     origin_len = len(vector_chunks) + len(entity_chunks) + len(relation_chunks)
     logger.info(f"Collected initial chunks: {origin_len} total (Vector: {len(vector_chunks)}, Entity: {len(entity_chunks)}, Relation: {len(relation_chunks)})")
     
-    # Create temporary empty text_units_context for multi-hop expansion
+    # Process initial chunks to build text_units_context before any early returns
+    # Round-robin merge of initial chunks for text_units_context
+    initial_merged_chunks = []
+    seen_chunk_ids = set()
+    max_len = max(len(vector_chunks), len(entity_chunks), len(relation_chunks)) if any([vector_chunks, entity_chunks, relation_chunks]) else 0
+
+    for i in range(max_len):
+        # Add from each source in round-robin fashion: vector → entity → relation
+        for chunk_list in [vector_chunks, entity_chunks, relation_chunks]:
+            if i < len(chunk_list):
+                chunk = chunk_list[i]
+                chunk_id = chunk.get("chunk_id") or chunk.get("id") or f"chunk_{i}"
+                if chunk_id not in seen_chunk_ids:
+                    seen_chunk_ids.add(chunk_id)
+                    initial_merged_chunks.append({
+                        "content": chunk["content"],
+                        "file_path": chunk.get("file_path", "unknown_source"),
+                        "chunk_id": chunk_id,
+                        "timestamp": chunk.get("timestamp", ""),
+                    })
+
+    # Apply token processing to initial chunks for text_units_context
     text_units_context = []
+    if initial_merged_chunks:
+        # Apply chunk_top_k truncation if specified
+        if query_param.chunk_top_k and len(initial_merged_chunks) > query_param.chunk_top_k:
+            initial_merged_chunks = initial_merged_chunks[:query_param.chunk_top_k]
+
+        # Process chunks through unified processing (for token limits, reranking, etc.)
+        tokenizer = text_chunks_db.global_config.get("tokenizer")
+        if tokenizer:
+            from lightrag.utils import process_chunks_unified
+            try:
+                # Calculate a reasonable token limit for initial chunks
+                max_total_tokens = getattr(query_param, "max_total_tokens", text_chunks_db.global_config.get("max_total_tokens", 120000))
+                # Reserve about 30% of tokens for chunks, rest for KG context and system prompt
+                initial_chunk_token_limit = int(max_total_tokens * 0.3)
+
+                processed_chunks = await process_chunks_unified(
+                    query=query,
+                    unique_chunks=initial_merged_chunks,
+                    query_param=query_param,
+                    global_config=text_chunks_db.global_config,
+                    source_type=query_param.mode,
+                    chunk_token_limit=initial_chunk_token_limit,
+                )
+
+                # Build text_units_context from processed chunks
+                for i, chunk in enumerate(processed_chunks):
+                    text_units_context.append({
+                        "id": i + 1,
+                        "content": chunk["content"],
+                        "file_path": chunk.get("file_path", "unknown_source"),
+                        "The content is from": chunk.get("timestamp", ""),
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to process initial chunks: {e}")
+                # Fallback to raw chunks
+                for i, chunk in enumerate(initial_merged_chunks):
+                    text_units_context.append({
+                        "id": i + 1,
+                        "content": chunk["content"],
+                        "file_path": chunk.get("file_path", "unknown_source"),
+                        "The content is from": chunk.get("timestamp", ""),
+                    })
 
     # not necessary to use LLM to generate a response
     if not entities_context and not relations_context:
         return None
-
-    # Chunk tracking will be handled after expansion when chunks are finally processed
 
     # Keep original round-robin ordering logic for fair data balance
 
