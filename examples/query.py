@@ -30,7 +30,7 @@ async def main():
                 max_entity_tokens=30000,
                 max_relation_tokens=30000,
                 max_hop=2,
-                max_neighbors= 20,
+                top_neighbors= 20,
                 multi_hop_relevance_threshold=0.3,
                 enable_rerank=False,
                 top_ppr_nodes=5,       
