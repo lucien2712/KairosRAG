@@ -138,7 +138,65 @@ Text:
 {completion_delimiter}
 
 """,
-    """[Example 4 - Financial Table Processing]
+    """[Example 4]
+
+---Input---
+Entity_types: [organization,person,location,event,technology,equipment,product,Document,category,financial_metric]
+Text:
+```
+During Apple's Q3 2024 earnings call on July 31, 2024, CEO Tim Cook announced that iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to Q3 2023. The company also reported that Services revenue grew to $24.2 billion, up 14% year-over-year. Cook highlighted that despite supply chain challenges with key supplier TSMC, Apple maintained strong performance in the Greater China region with $14.7 billion in revenue.
+```
+
+---Output---
+(entity{tuple_delimiter}Apple{tuple_delimiter}organization{tuple_delimiter}Apple is a technology company that reported quarterly earnings, showing mixed performance across product categories with iPhone revenue declining but Services revenue growing.){record_delimiter}
+(entity{tuple_delimiter}Tim Cook{tuple_delimiter}person{tuple_delimiter}Tim Cook is Apple's CEO who presented the company's Q3 2024 earnings results, highlighting both challenges and successes.){record_delimiter}
+(entity{tuple_delimiter}iPhone Revenue{tuple_delimiter}financial_metric{tuple_delimiter}iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to the previous year's Q3 results.){record_delimiter}
+(entity{tuple_delimiter}Services Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Services revenue grew to $24.2 billion, up 14% year-over-year, demonstrating strong growth in Apple's services business.){record_delimiter}
+(entity{tuple_delimiter}TSMC{tuple_delimiter}organization{tuple_delimiter}TSMC is identified as a key supplier to Apple, currently experiencing supply chain challenges that affect Apple's operations.){record_delimiter}
+(entity{tuple_delimiter}Greater China Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Greater China region generated $14.7 billion in revenue for Apple, maintaining strong regional performance despite challenges.){record_delimiter}
+(entity{tuple_delimiter}Q3 2024 Earnings Call{tuple_delimiter}event{tuple_delimiter}Apple's quarterly earnings call held on July 31, 2024, where financial results and strategic updates were announced to investors and analysts.){record_delimiter}
+(relationship{tuple_delimiter}Tim Cook{tuple_delimiter}Apple{tuple_delimiter}leadership, earnings presentation{tuple_delimiter}Tim Cook serves as Apple's CEO and presented the company's Q3 2024 earnings results, providing strategic guidance to stakeholders.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}iPhone Revenue{tuple_delimiter}product performance, financial results{tuple_delimiter}Apple reported iPhone revenue of $39.3 billion, showing a 1.5% decline from the previous year, indicating challenges in the smartphone market.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}Services Revenue{tuple_delimiter}business segment, growth performance{tuple_delimiter}Apple's Services division generated $24.2 billion in revenue, demonstrating 14% year-over-year growth and highlighting the importance of services to Apple's business model.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}TSMC{tuple_delimiter}supplier relationship, supply chain challenges{tuple_delimiter}Apple faces supply chain challenges with key supplier TSMC, impacting the company's ability to meet product demand despite overall strong performance.){record_delimiter}
+(relationship{tuple_delimiter}Apple{tuple_delimiter}Greater China Revenue{tuple_delimiter}regional performance, market presence{tuple_delimiter}Apple maintained strong performance in Greater China with $14.7 billion in quarterly revenue, demonstrating resilience in a key market.){record_delimiter}
+{completion_delimiter}
+
+""",
+    """[Example 5]
+
+---Input---
+Entity_types: [organization,financial_metric,account_item,currency,temporal_range]
+Text:
+```
+TechCorp Q3 2024 Revenue Summary
+Currency: USD thousands
+
+<table>
+<thead>
+<tr><th>Account</th><th>Q3 2024</th><th>Q2 2024</th></tr>
+</thead>
+<tbody>
+<tr><td>Product Sales</td><td>$1,200</td><td>$1,150</td></tr>
+<tr><td>Service Revenue</td><td>$800</td><td>$750</td></tr>
+<tr><td>Total Revenue</td><td>$2,000</td><td>$1,900</td></tr>
+</tbody>
+</table>
+```
+
+---Output---
+(entity{tuple_delimiter}TechCorp{tuple_delimiter}organization{tuple_delimiter}TechCorp is a technology company reporting quarterly revenue growth from Q2 to Q3 2024.){record_delimiter}
+(entity{tuple_delimiter}Q3 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q3 2024 reporting period with total revenue of $2,000 thousand.){record_delimiter}
+(entity{tuple_delimiter}Q2 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q2 2024 comparison period with total revenue of $1,900 thousand.){record_delimiter}
+(entity{tuple_delimiter}USD thousands{tuple_delimiter}currency{tuple_delimiter}USD thousands is the monetary unit for all revenue figures.){record_delimiter}
+(entity{tuple_delimiter}Product Sales{tuple_delimiter}account_item{tuple_delimiter}Product Sales revenue stream showing growth from $1,150 to $1,200 thousand.){record_delimiter}
+(entity{tuple_delimiter}Total Revenue{tuple_delimiter}account_item{tuple_delimiter}Total Revenue combining Product Sales and Service Revenue.){record_delimiter}
+(entity{tuple_delimiter}2,000{tuple_delimiter}financial_metric{tuple_delimiter}2,000 USD thousands represents Q3 2024 Total Revenue.){record_delimiter}
+(relationship{tuple_delimiter}Product Sales{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Product Sales contributes to Total Revenue calculation.){record_delimiter}
+(relationship{tuple_delimiter}Q3 2024{tuple_delimiter}Q2 2024{tuple_delimiter}temporal comparison{tuple_delimiter}Q3 2024 shows revenue growth compared to Q2 2024.){record_delimiter}
+{completion_delimiter}
+""",
+    """[Example 6]
 
 ---Input---
 Entity_types: [organization,financial_metric,account_item,currency,temporal_range]
@@ -176,32 +234,7 @@ Text:
 (relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
 {completion_delimiter}
 
-""",
-    """[Example 5]
-
----Input---
-Entity_types: [organization,person,location,event,technology,equipment,product,Document,category,financial_metric]
-Text:
-```
-During Apple's Q3 2024 earnings call on July 31, 2024, CEO Tim Cook announced that iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to Q3 2023. The company also reported that Services revenue grew to $24.2 billion, up 14% year-over-year. Cook highlighted that despite supply chain challenges with key supplier TSMC, Apple maintained strong performance in the Greater China region with $14.7 billion in revenue.
-```
-
----Output---
-(entity{tuple_delimiter}Apple{tuple_delimiter}organization{tuple_delimiter}Apple is a technology company that reported quarterly earnings, showing mixed performance across product categories with iPhone revenue declining but Services revenue growing.){record_delimiter}
-(entity{tuple_delimiter}Tim Cook{tuple_delimiter}person{tuple_delimiter}Tim Cook is Apple's CEO who presented the company's Q3 2024 earnings results, highlighting both challenges and successes.){record_delimiter}
-(entity{tuple_delimiter}iPhone Revenue{tuple_delimiter}financial_metric{tuple_delimiter}iPhone revenue reached $39.3 billion, representing a 1.5% decline compared to the previous year's Q3 results.){record_delimiter}
-(entity{tuple_delimiter}Services Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Services revenue grew to $24.2 billion, up 14% year-over-year, demonstrating strong growth in Apple's services business.){record_delimiter}
-(entity{tuple_delimiter}TSMC{tuple_delimiter}organization{tuple_delimiter}TSMC is identified as a key supplier to Apple, currently experiencing supply chain challenges that affect Apple's operations.){record_delimiter}
-(entity{tuple_delimiter}Greater China Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Greater China region generated $14.7 billion in revenue for Apple, maintaining strong regional performance despite challenges.){record_delimiter}
-(entity{tuple_delimiter}Q3 2024 Earnings Call{tuple_delimiter}event{tuple_delimiter}Apple's quarterly earnings call held on July 31, 2024, where financial results and strategic updates were announced to investors and analysts.){record_delimiter}
-(relationship{tuple_delimiter}Tim Cook{tuple_delimiter}Apple{tuple_delimiter}leadership, earnings presentation{tuple_delimiter}Tim Cook serves as Apple's CEO and presented the company's Q3 2024 earnings results, providing strategic guidance to stakeholders.){record_delimiter}
-(relationship{tuple_delimiter}Apple{tuple_delimiter}iPhone Revenue{tuple_delimiter}product performance, financial results{tuple_delimiter}Apple reported iPhone revenue of $39.3 billion, showing a 1.5% decline from the previous year, indicating challenges in the smartphone market.){record_delimiter}
-(relationship{tuple_delimiter}Apple{tuple_delimiter}Services Revenue{tuple_delimiter}business segment, growth performance{tuple_delimiter}Apple's Services division generated $24.2 billion in revenue, demonstrating 14% year-over-year growth and highlighting the importance of services to Apple's business model.){record_delimiter}
-(relationship{tuple_delimiter}Apple{tuple_delimiter}TSMC{tuple_delimiter}supplier relationship, supply chain challenges{tuple_delimiter}Apple faces supply chain challenges with key supplier TSMC, impacting the company's ability to meet product demand despite overall strong performance.){record_delimiter}
-(relationship{tuple_delimiter}Apple{tuple_delimiter}Greater China Revenue{tuple_delimiter}regional performance, market presence{tuple_delimiter}Apple maintained strong performance in Greater China with $14.7 billion in quarterly revenue, demonstrating resilience in a key market.){record_delimiter}
-{completion_delimiter}
-
-""",
+"""
 ]
 
 PROMPTS["summarize_entity_descriptions"] = """---Role---
