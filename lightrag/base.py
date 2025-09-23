@@ -162,7 +162,7 @@ class QueryParam:
     max_hop: int = 1
     """Maximum number of hops for multi-hop retrieval. Default is 1 to maintain original behavior."""
 
-    max_neighbors: int = 10
+    top_neighbors: int = 10
     """Maximum number of neighbors to select per hop during multi-hop expansion."""
 
     multi_hop_relevance_threshold: float = 0.3

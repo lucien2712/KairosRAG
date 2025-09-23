@@ -33,6 +33,14 @@ You are a Knowledge Graph Specialist responsible for extracting entities and rel
 7. **Undirectional Relationship:** Treat relationships as undirected; swapping the source and target entities does not constitute a new relationship. Avoid outputting duplicate relationships.
 8. **Language:** Output entity names, keywords and descriptions in {language}.
 9. **Delimiter:** Use `{record_delimiter}` as the entity or relationship list delimiter; output `{completion_delimiter}` when all the entities and relationships are extracted.
+10. **Table Processing:** When processing HTML tables (<table>...</table>), pay special attention to:
+  - **Key Financial Data**: Extract monetary amounts, percentages, and financial metrics as `financial_metric` entities (e.g., "839,253,664", "58.8%", "gross margin")
+  - **Account Items**: Extract financial statement line items as `account_item` entities (e.g., "營業收入淨額", "total assets", "operating expenses")
+  - **Currency Units**: Extract currency and unit information as `currency` entities (e.g., "新台幣仟元", "NT$", "USD")
+  - **Calculation Relationships**: Establish mathematical relationships between related financial data (e.g., gross profit = revenue - cost)
+  - **Time Comparisons**: Link financial data to appropriate time periods using `temporal_range` entities
+  - **Table Structure**: Recognize hierarchical relationships within table categories and subcategories
+  - **Focus on Key Data**: Prioritize extraction of significant financial metrics over comprehensive coverage
 
 ---Examples---
 {examples}
@@ -113,46 +121,63 @@ Financial experts are closely watching the Federal Reserve's next move, as specu
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
 Text:
 ```
-At the World Athletics Championship in Tokyo, Noah Carter broke the 100m sprint record using cutting-edge carbon-fiber spikes.
+在台北舉行的人工智能大會上，騰訊公司的首席技術官張偉發布了最新的大語言模型「騰訊智言」，該模型在自然語言處理方面取得了重大突破。
 ```
 
 ---Output---
-(entity{tuple_delimiter}World Athletics Championship{tuple_delimiter}event{tuple_delimiter}The World Athletics Championship is a global sports competition featuring top athletes in track and field. This championship event is being held in Tokyo in 2024.){record_delimiter}
-(entity{tuple_delimiter}Tokyo{tuple_delimiter}location{tuple_delimiter}Tokyo is the host city of the World Athletics Championship where the historic 100m sprint record was broken.){record_delimiter}
-(entity{tuple_delimiter}Noah Carter{tuple_delimiter}person{tuple_delimiter}Noah Carter is a sprinter who achieved a historic milestone by breaking the 100m sprint record using cutting-edge carbon-fiber spikes at the World Athletics Championship in Tokyo.){record_delimiter}
-(entity{tuple_delimiter}100m Sprint Record{tuple_delimiter}category{tuple_delimiter}The 100m sprint record is a benchmark in athletics, representing the fastest recorded time for the 100-meter sprint distance.){record_delimiter}
-(entity{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}equipment{tuple_delimiter}Carbon-fiber spikes are cutting-edge advanced sprinting shoes designed to enhance speed and traction for competitive runners.){record_delimiter}
-(relationship{tuple_delimiter}World Athletics Championship{tuple_delimiter}Tokyo{tuple_delimiter}event location, international competition{tuple_delimiter}The World Athletics Championship is being hosted in Tokyo, providing the venue for the historic record-breaking 100m sprint.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}100m Sprint Record{tuple_delimiter}athlete achievement, record-breaking{tuple_delimiter}Noah Carter broke the 100m sprint record at the World Athletics Championship, marking a significant achievement in track and field history.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}Carbon-Fiber Spikes{tuple_delimiter}athletic equipment, performance boost{tuple_delimiter}Noah Carter used cutting-edge carbon-fiber spikes to enhance his performance during the record-breaking race.){record_delimiter}
-(relationship{tuple_delimiter}Noah Carter{tuple_delimiter}World Athletics Championship{tuple_delimiter}athlete participation, competition{tuple_delimiter}Noah Carter participated in the World Athletics Championship in Tokyo where he achieved his record-breaking performance.){record_delimiter}
+(entity{tuple_delimiter}人工智能大會{tuple_delimiter}event{tuple_delimiter}人工智能大會是在台北舉行的技術會議，專注於人工智能領域的最新發展，騰訊公司在此發布了新產品。){record_delimiter}
+(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}台北是人工智能大會的舉辦城市，見證了騰訊智言大語言模型的重要發布。){record_delimiter}
+(entity{tuple_delimiter}騰訊公司{tuple_delimiter}organization{tuple_delimiter}騰訊公司是參與人工智能大會的科技企業，透過首席技術官張偉發布了新的大語言模型產品。){record_delimiter}
+(entity{tuple_delimiter}張偉{tuple_delimiter}person{tuple_delimiter}張偉是騰訊公司的首席技術官，在台北舉行的人工智能大會上發布了騰訊智言產品。){record_delimiter}
+(entity{tuple_delimiter}騰訊智言{tuple_delimiter}product{tuple_delimiter}騰訊智言是騰訊公司在人工智能大會上發布的大語言模型產品，在自然語言處理方面取得了重大突破。){record_delimiter}
+(entity{tuple_delimiter}自然語言處理技術{tuple_delimiter}technology{tuple_delimiter}自然語言處理技術是騰訊智言模型取得重大突破的技術領域，展現了最新發展成果。){record_delimiter}
+(relationship{tuple_delimiter}人工智能大會{tuple_delimiter}北京{tuple_delimiter}會議地點, 舉辦關係{tuple_delimiter}人工智能大會在台北舉行，成為騰訊等科技企業展示最新技術的重要平台。){record_delimiter}
+(relationship{tuple_delimiter}張偉{tuple_delimiter}騰訊公司{tuple_delimiter}雇傭關係, 高管職位{tuple_delimiter}張偉擔任騰訊公司的首席技術官，代表公司在人工智能大會上進行重要產品發布。){record_delimiter}
+(relationship{tuple_delimiter}張偉{tuple_delimiter}騰訊智言{tuple_delimiter}產品發布, 技術展示{tuple_delimiter}張偉在人工智能大會上發布了騰訊智言大語言模型，展示了公司在AI領域的技術實力。){record_delimiter}
+(relationship{tuple_delimiter}騰訊智言{tuple_delimiter}自然語言處理技術{tuple_delimiter}技術應用, 突破創新{tuple_delimiter}騰訊智言在自然語言處理技術方面取得了重大突破，代表了該領域的最新進展。){record_delimiter}
 {completion_delimiter}
 
 """,
-    """[Example 4]
+    """[Example 4 - Financial Table Processing]
 
 ---Input---
-Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
+Entity_types: [organization,financial_metric,account_item,currency,temporal_range]
 Text:
 ```
-在北京举行的人工智能大会上，腾讯公司的首席技术官张伟发布了最新的大语言模型"腾讯智言"，该模型在自然语言处理方面取得了重大突破。
+台灣積體電路製造股份有限公司及子公司
+合併綜合損益表
+民國114年及113年1月1日至3月31日
+單位：新台幣仟元
+
+<table>
+<thead>
+<tr><th>代碼</th><th></th><th>114年1月1日至3月31日</th><th>113年1月1日至3月31日</th></tr>
+</thead>
+<tbody>
+<tr><td>4000</td><td>營業收入淨額</td><td>$ 839,253,664</td><td>$ 592,644,201</td></tr>
+<tr><td>5000</td><td>營業成本</td><td>345,858,588</td><td>268,447,198</td></tr>
+<tr><td>5950</td><td>營業毛利</td><td>493,395,076</td><td>324,197,003</td></tr>
+</tbody>
+</table>
 ```
 
 ---Output---
-(entity{tuple_delimiter}人工智能大会{tuple_delimiter}event{tuple_delimiter}人工智能大会是在北京举行的技术会议，专注于人工智能领域的最新发展，腾讯公司在此发布了新产品。){record_delimiter}
-(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}北京是人工智能大会的举办城市，见证了腾讯智言大语言模型的重要发布。){record_delimiter}
-(entity{tuple_delimiter}腾讯公司{tuple_delimiter}organization{tuple_delimiter}腾讯公司是参与人工智能大会的科技企业，通过首席技术官张伟发布了新的大语言模型产品。){record_delimiter}
-(entity{tuple_delimiter}张伟{tuple_delimiter}person{tuple_delimiter}张伟是腾讯公司的首席技术官，在北京举行的人工智能大会上发布了腾讯智言产品。){record_delimiter}
-(entity{tuple_delimiter}腾讯智言{tuple_delimiter}product{tuple_delimiter}腾讯智言是腾讯公司在人工智能大会上发布的大语言模型产品，在自然语言处理方面取得了重大突破。){record_delimiter}
-(entity{tuple_delimiter}自然语言处理技术{tuple_delimiter}technology{tuple_delimiter}自然语言处理技术是腾讯智言模型取得重大突破的技术领域，展现了最新发展成果。){record_delimiter}
-(relationship{tuple_delimiter}人工智能大会{tuple_delimiter}北京{tuple_delimiter}会议地点, 举办关系{tuple_delimiter}人工智能大会在北京举行，成为腾讯等科技企业展示最新技术的重要平台。){record_delimiter}
-(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯公司{tuple_delimiter}雇佣关系, 高管职位{tuple_delimiter}张伟担任腾讯公司的首席技术官，代表公司在人工智能大会上进行重要产品发布。){record_delimiter}
-(relationship{tuple_delimiter}张伟{tuple_delimiter}腾讯智言{tuple_delimiter}产品发布, 技术展示{tuple_delimiter}张伟在人工智能大会上发布了腾讯智言大语言模型，展示了公司在AI领域的技术实力。){record_delimiter}
-(relationship{tuple_delimiter}腾讯智言{tuple_delimiter}自然语言处理技术{tuple_delimiter}技术应用, 突破创新{tuple_delimiter}腾讯智言在自然语言处理技术方面取得了重大突破，代表了该领域的最新进展。){record_delimiter}
+(entity{tuple_delimiter}台灣積體電路製造股份有限公司{tuple_delimiter}organization{tuple_delimiter}台灣積體電路製造股份有限公司是一家半導體製造公司，發布民國114年第一季合併綜合損益表，展示營運績效。){record_delimiter}
+(entity{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國114年第一季報告期間，對應公司最新的財務表現。){record_delimiter}
+(entity{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國113年第一季比較期間，用於分析公司年度變化趨勢。){record_delimiter}
+(entity{tuple_delimiter}新台幣仟元{tuple_delimiter}currency{tuple_delimiter}新台幣仟元是財務報表的主要計價單位，用於表示金額數據。){record_delimiter}
+(entity{tuple_delimiter}營業收入淨額{tuple_delimiter}account_item{tuple_delimiter}營業收入淨額是損益表的首要科目，代表公司主要營業活動的收入。){record_delimiter}
+(entity{tuple_delimiter}營業成本{tuple_delimiter}account_item{tuple_delimiter}營業成本是製造和銷售產品的直接成本，影響毛利率計算。){record_delimiter}
+(entity{tuple_delimiter}營業毛利{tuple_delimiter}account_item{tuple_delimiter}營業毛利是營業收入減去營業成本的結果，反映核心營運獲利能力。){record_delimiter}
+(entity{tuple_delimiter}839,253,664{tuple_delimiter}financial_metric{tuple_delimiter}839,253,664新台幣仟元是民國114年第一季營業收入淨額，比前年同期大幅增長。){record_delimiter}
+(entity{tuple_delimiter}493,395,076{tuple_delimiter}financial_metric{tuple_delimiter}493,395,076新台幣仟元是民國114年第一季營業毛利，顯示強勁獲利能力。){record_delimiter}
+(relationship{tuple_delimiter}營業收入淨額{tuple_delimiter}營業成本{tuple_delimiter}財務計算, 毛利基礎{tuple_delimiter}營業毛利通過營業收入淨額減去營業成本計算得出。){record_delimiter}
+(relationship{tuple_delimiter}839,253,664{tuple_delimiter}345,858,588{tuple_delimiter}數學關係, 毛利計算{tuple_delimiter}營業毛利493,395,076為營業收入839,253,664減去營業成本345,858,588的結果。){record_delimiter}
+(relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
 {completion_delimiter}
 
 """,
-    """[Example 5 - Temporal Financial Information]
+    """[Example 5]
 
 ---Input---
 Entity_types: [organization,person,location,event,technology,equipment,product,Document,category,financial_metric]
@@ -400,14 +425,25 @@ B.description = Taiwan Semiconductor Manufacturing Company, the world's largest 
 
 # Entity Type Augmentation Prompts
 PROMPTS["entity_type_suggestion_system"] = """
-You are an expert in Named Entity Recognition (NER). Your goal is to analyze the connections and relations between existing entity types and document content to provide meaningful refinements or additions.
+You are an expert in Named Entity Recognition (NER) with expertise across multiple domains. Your goal is to analyze the connections and relations between existing entity types and document content to provide meaningful refinements or additions that enhance entity extraction for various document types.
 
 ## Task Requirements:
+- Suggest entity types that improve extraction quality for the specific document domain
+- Consider the document's context, structure, and content patterns
 - Avoid suggesting "other" or "unknown" types
-- Do not suggest duplicates or overlapping entity types  
-- Prioritize quality over quantity
-- Provide concise yet clear explanations
+- Do not suggest duplicates or overlapping entity types
+- Prioritize quality over quantity with domain-appropriate coverage
+- Consider structured data elements like tables, lists, and classifications when present
+- Provide concise yet clear explanations with relevant examples
 - Respond in strict JSON array format only
+
+## Multi-Domain Context Considerations:
+- **Technical Documents**: Components, specifications, procedures, standards, measurements
+- **Academic Papers**: Research methods, findings, citations, institutions, datasets
+- **Business Documents**: Metrics, processes, departments, strategies, performance indicators
+- **Financial Reports**: Assets, revenues, ratios, statements, accounting items
+- **News Articles**: Events, locations, quotes, sources, impacts
+- **Legal Documents**: Clauses, parties, terms, obligations, references
 
 ## Response Format:
 [
@@ -421,23 +457,31 @@ You are an expert in Named Entity Recognition (NER). Your goal is to analyze the
 ### Current Entity Types:
 [
     {
-        "entity_type": "person",
-        "explanation": "An entity representing individual persons."
+        "entity_type": "organization",
+        "explanation": "An entity representing organizations, companies, or institutions."
     },
     {
-        "entity_type": "temporal_range",
-        "explanation": "An entity representing time periods, including specific dates, months, quarters, or years (e.g., '2024 Q1', '2024 July')."
+        "entity_type": "person",
+        "explanation": "An entity representing individual persons."
     }
 ]
-## Document Content:
-Apple Inc. was founded in 1976. After that, it became one of the most successful companies in the world.
 
+### Document Content:
+The research team at MIT conducted a systematic review of machine learning algorithms, analyzing 150 datasets from 2020-2024. The study employed cross-validation techniques and achieved an accuracy of 94.2% using deep neural networks. Results were published in Nature Machine Intelligence.
 
 ### Suggested New Entity Types:
 [
     {
-        "entity_type": "organization",
-        "explanation": "An entity representing organizations, companies, or institutions."
+        "entity_type": "research_method",
+        "explanation": "Methodological approaches and techniques used in research (e.g., 'systematic review', 'cross-validation', 'deep neural networks')."
+    },
+    {
+        "entity_type": "metric",
+        "explanation": "Quantitative measurements and performance indicators (e.g., '94.2%', 'accuracy', 'sample size of 150')."
+    },
+    {
+        "entity_type": "publication",
+        "explanation": "Academic publications, journals, and research outputs (e.g., 'Nature Machine Intelligence', 'conference proceedings')."
     }
 ]
 """
@@ -447,26 +491,40 @@ PROMPTS["entity_type_suggestion_user"] = """
 {current_entity_types}
 
 ## Task:
-Based on the following document content, analyze and suggest new entity types with explanations if needed.
+Based on the following document content, analyze and suggest new entity types with explanations if needed. Consider the document's domain and structure:
+
+1. **Content Analysis**: Examine the document's subject matter, terminology, and domain-specific concepts
+2. **Structural Elements**: Notice tables, lists, classifications, and organized data patterns
+3. **Entity Patterns**: Identify recurring entity types that appear frequently in the content
+4. **Relationships**: Consider entities that represent important connections and dependencies
+5. **Domain Specificity**: Suggest entity types that capture domain-specific knowledge effectively
 
 ## Document Content:
 {file_content}
 
-Please carefully analyze the entities that appear in the document and suggest appropriate new entity types (if any are needed).
+Please carefully analyze the entities that appear in the document, considering its structure and domain context, and suggest appropriate new entity types that would improve extraction coverage for this type of content.
 """
 
 PROMPTS["entity_type_refinement_system"] = """
-You are an advanced linguistic assistant with expertise in Named Entity Recognition (NER).
+You are an advanced linguistic assistant with expertise in Named Entity Recognition (NER) across multiple domains.
 
 ## Task:
-Refine a list of entity types by removing duplicates or semantically overlapping types.
+Refine a list of entity types by removing duplicates or semantically overlapping types, ensuring domain-appropriate optimization.
 
 ## Requirements:
 - Ensure each type is distinct, meaningful, and concise
 - Remove redundant or overlapping entity types
 - Keep the most comprehensive and well-defined entity type when merging similar ones
-- Maintain clear and accurate explanations
+- Prioritize domain-specific entity types over overly generic classifications
+- Consider the document context and extraction requirements when evaluating usefulness
+- Maintain clear and accurate explanations with relevant examples
 - Return the refined list in strict JSON array format only
+
+## Domain-Specific Considerations:
+- Prefer specific, actionable entity types over generic ones (e.g., "research_method" over "concept")
+- Maintain appropriate granularity for the document domain
+- Preserve important distinctions within specialized fields
+- Consider extraction patterns and relationship building potential
 
 ## Response Format:
 [

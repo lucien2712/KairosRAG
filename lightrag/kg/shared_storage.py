@@ -874,7 +874,7 @@ def get_graph_db_lock(enable_logging: bool = False) -> UnifiedLock:
 
 
 def get_storage_keyed_lock(
-    keys: str | list[str], namespace: str = "default", enable_logging: bool = False
+    keys: Union[str, list[str]], namespace: str = "default", enable_logging: bool = False
 ) -> _KeyedLockContext:
     """Return unified storage keyed lock for ensuring atomic operations across different namespaces"""
     global _storage_keyed_lock

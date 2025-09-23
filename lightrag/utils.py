@@ -2538,3 +2538,73 @@ def get_pinyin_sort_key(text: str) -> str:
     else:
         # pypinyin not available, use simple string sorting
         return text.lower()
+
+
+def find_table_boundaries(content: str) -> list[tuple[int, int]]:
+    """Find all HTML table boundaries in the content.
+
+    Args:
+        content: Text content that may contain HTML tables
+
+    Returns:
+        List of tuples (start_pos, end_pos) for each table found
+    """
+    table_boundaries = []
+
+    # Use regex to find all table tags (case-insensitive)
+    table_pattern = re.compile(r'<table[^>]*>.*?</table>', re.IGNORECASE | re.DOTALL)
+
+    for match in table_pattern.finditer(content):
+        start_pos = match.start()
+        end_pos = match.end()
+        table_boundaries.append((start_pos, end_pos))
+
+    return table_boundaries
+
+
+def get_token_positions(tokenizer: Tokenizer, content: str) -> list[int]:
+    """Get character positions corresponding to token boundaries.
+
+    Args:
+        tokenizer: Tokenizer instance
+        content: Text content
+
+    Returns:
+        List of character positions for each token boundary
+    """
+    tokens = tokenizer.encode(content)
+    positions = [0]  # Start position
+
+    current_pos = 0
+    for i in range(len(tokens)):
+        # Decode up to current token to find position
+        decoded = tokenizer.decode(tokens[:i+1])
+        current_pos = len(decoded)
+        positions.append(current_pos)
+
+    return positions
+
+
+def find_token_position_near_char(token_positions: list[int], char_pos: int, direction: str = "before") -> int:
+    """Find the token position nearest to a character position.
+
+    Args:
+        token_positions: List of character positions for token boundaries
+        char_pos: Target character position
+        direction: "before" to find position before char_pos, "after" for after
+
+    Returns:
+        Index of the token position
+    """
+    if direction == "before":
+        # Find the largest token position <= char_pos
+        for i in range(len(token_positions) - 1, -1, -1):
+            if token_positions[i] <= char_pos:
+                return i
+        return 0
+    else:  # direction == "after"
+        # Find the smallest token position >= char_pos
+        for i in range(len(token_positions)):
+            if token_positions[i] >= char_pos:
+                return i
+        return len(token_positions) - 1

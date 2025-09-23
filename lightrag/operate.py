@@ -30,6 +30,9 @@ from .utils import (
     pick_by_vector_similarity,
     process_chunks_unified,
     build_file_path,
+    find_table_boundaries,
+    get_token_positions,
+    find_token_position_near_char,
 )
 from .base import (
     BaseGraphStorage,
@@ -66,7 +69,125 @@ def chunking_by_token_size(
     split_by_character_only: bool = False,
     overlap_token_size: int = 128,
     max_token_size: int = 1024,
+    table_context_tokens: int = 100,
 ) -> list[dict[str, Any]]:
+    """Enhanced chunking with table-aware processing.
+
+    Tables are kept complete in single chunks with additional context tokens
+    before and after the table content.
+    """
+    # Find all table boundaries in the content
+    table_boundaries = find_table_boundaries(content)
+
+    if not table_boundaries:
+        # No tables found, use original chunking logic
+        return _original_chunking_by_token_size(
+            tokenizer, content, split_by_character, split_by_character_only,
+            overlap_token_size, max_token_size
+        )
+
+    results: list[dict[str, Any]] = []
+
+    # Process each table as an independent chunk with smart context boundaries
+    processed_char_ranges = []
+
+    for i, (table_start_char, table_end_char) in enumerate(table_boundaries):
+        # Calculate initial context boundaries
+        context_start_char = max(0, table_start_char - (table_context_tokens * 4))
+        context_end_char = min(len(content), table_end_char + (table_context_tokens * 4))
+
+        # Adjust boundaries to avoid including other tables
+        # Check if context overlaps with previous table
+        if i > 0:
+            prev_table_start, prev_table_end = table_boundaries[i-1]
+            if context_start_char < prev_table_end:
+                # Adjust start to avoid including previous table
+                context_start_char = prev_table_end + 1
+
+        # Check if context overlaps with next table
+        if i < len(table_boundaries) - 1:
+            next_table_start, next_table_end = table_boundaries[i+1]
+            if context_end_char > next_table_start:
+                # Adjust end to avoid including next table
+                context_end_char = next_table_start - 1
+
+        # Ensure we still include the complete table
+        context_start_char = min(context_start_char, table_start_char)
+        context_end_char = max(context_end_char, table_end_char)
+
+        # Extract complete content using character positions
+        complete_table_content = content[context_start_char:context_end_char]
+
+        # Get accurate token count for the complete content
+        complete_tokens = tokenizer.encode(complete_table_content)
+
+        # Verify table completeness - should be exactly 1 table per chunk
+        table_starts = complete_table_content.count('<table')
+        table_ends = complete_table_content.count('</table>')
+
+        results.append({
+            "tokens": len(complete_tokens),
+            "content": complete_table_content.strip(),
+            "chunk_order_index": len(results),
+            "contains_table": True,
+            "table_complete": table_starts == table_ends and table_starts == 1,
+        })
+
+        # Record the processed character range
+        processed_char_ranges.append((context_start_char, context_end_char))
+
+    # Process non-table content with regular chunking
+    processed_char_ranges.sort()  # Sort by start position
+    current_char = 0
+
+    for start_char, end_char in processed_char_ranges:
+        # Process content before this table chunk
+        if current_char < start_char:
+            before_table_content = content[current_char:start_char].strip()
+            if before_table_content:  # Only if there's content
+                # Apply regular chunking to this section
+                before_chunks = _original_chunking_by_token_size(
+                    tokenizer, before_table_content, split_by_character,
+                    split_by_character_only, overlap_token_size, max_token_size
+                )
+                # Update chunk indices
+                for chunk in before_chunks:
+                    chunk["chunk_order_index"] = len(results)
+                    results.append(chunk)
+        current_char = end_char
+
+    # Process remaining content after last table
+    if current_char < len(content):
+        remaining_content = content[current_char:].strip()
+        if remaining_content:
+            remaining_chunks = _original_chunking_by_token_size(
+                tokenizer, remaining_content, split_by_character,
+                split_by_character_only, overlap_token_size, max_token_size
+            )
+            # Update chunk indices
+            for chunk in remaining_chunks:
+                chunk["chunk_order_index"] = len(results)
+                results.append(chunk)
+
+    # Sort results by chunk order to maintain document flow
+    results.sort(key=lambda x: x.get("chunk_order_index", 0))
+
+    # Re-index the chunks
+    for i, chunk in enumerate(results):
+        chunk["chunk_order_index"] = i
+
+    return results
+
+
+def _original_chunking_by_token_size(
+    tokenizer: Tokenizer,
+    content: str,
+    split_by_character: str | None = None,
+    split_by_character_only: bool = False,
+    overlap_token_size: int = 128,
+    max_token_size: int = 1024,
+) -> list[dict[str, Any]]:
+    """Original chunking logic without table awareness."""
     tokens = tokenizer.encode(content)
     results: list[dict[str, Any]] = []
     if split_by_character:
@@ -111,6 +232,32 @@ def chunking_by_token_size(
                     "chunk_order_index": index,
                 }
             )
+    return results
+
+
+def _chunk_token_sequence(
+    tokenizer: Tokenizer,
+    token_sequence: list[int],
+    overlap_token_size: int,
+    max_token_size: int,
+    start_index: int
+) -> list[dict[str, Any]]:
+    """Chunk a sequence of tokens using regular chunking logic."""
+    results = []
+
+    for i, start in enumerate(
+        range(0, len(token_sequence), max_token_size - overlap_token_size)
+    ):
+        chunk_tokens = token_sequence[start : start + max_token_size]
+        chunk_content = tokenizer.decode(chunk_tokens)
+
+        results.append({
+            "tokens": len(chunk_tokens),
+            "content": chunk_content.strip(),
+            "chunk_order_index": start_index + i,
+            "contains_table": False,
+        })
+
     return results
 
 
@@ -2637,10 +2784,10 @@ async def _semantic_expansion_plus_structural_analysis(
     
     logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + fastrp({query_param.top_fastrp_nodes})")
     
-    # Create params for multi-hop expansion (keeps original max_neighbors)
+    # Create params for multi-hop expansion (keeps original top_neighbors)
     multihop_param = QueryParam(
         max_hop=query_param.max_hop,
-        max_neighbors=query_param.max_neighbors,
+        top_neighbors=query_param.top_neighbors,
         multi_hop_relevance_threshold=query_param.multi_hop_relevance_threshold,
         top_fastrp_nodes=0,  # Multi-hop only, no structural analysis
     )
@@ -2984,7 +3131,7 @@ async def _find_structural_relations(
                 logger.debug(f"Error finding relations for {entity_name}: {e}")
         
         logger.info(f"Found {len(structural_relations)} structural relations")
-        return structural_relations[:query_param.max_neighbors]  # Limit results
+        return structural_relations[:query_param.top_neighbors]  # Limit results
         
     except Exception as e:
         logger.error(f"Error finding structural relations: {e}")
@@ -3283,7 +3430,7 @@ async def _original_multi_hop_expand(
 ) -> tuple[list[dict], list[dict]]:
     """Original multi-hop expansion logic (semantic path only)."""
     
-    logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, max_neighbors={query_param.max_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
+    logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, top_neighbors={query_param.top_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
     
     # Pre-compute query embeddings for performance optimization
     query_ll_embedding = None
@@ -3490,7 +3637,7 @@ async def _original_multi_hop_expand(
         
         # Sort by score and select top neighbors
         scored_neighbors.sort(key=lambda x: x[2], reverse=True)
-        selected = scored_neighbors[:query_param.max_neighbors]
+        selected = scored_neighbors[:query_param.top_neighbors]
         
         if not selected:
             logger.debug(f"No relevant neighbors found at hop {hop}, stopping expansion")
