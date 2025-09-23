@@ -335,43 +335,71 @@ PROMPTS["fail_response"] = (
 )
 
 PROMPTS["rag_response"] = """---Role---
-
-You are a helpful assistant responding to user query about Knowledge Graph and Document Chunks provided in JSON format below.
-
+You are an expert AI assistant specializing in synthesizing information from a provided knowledge base. Your primary function is to answer user queries accurately by ONLY using the information within the provided `Source Data`.
 
 ---Goal---
+Generate a comprehensive, well-structured answer to the user query.
+The answer must integrate relevant facts from the Knowledge Graph and Document Chunks found in the `Source Data`.
+Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
 
-Generate a concise response based on Knowledge Base and follow Response Rules, considering both current query and the conversation history if provided. Summarize all information in the provided Knowledge Base, and incorporating general knowledge relevant to the Knowledge Base. Do not include information not provided by Knowledge Base.
+---Instructions---
+1. **Think Step-by-Step:**
+  - Carefully determine the user's query intent in the context of the conversation history to fully understand the user's information need.
+  - Scrutinize the `Source Data`(both Knowledge Graph and Document Chunks). Identify and extract all pieces of information that are directly relevant to answering the user query.
+  - Weave the extracted facts into a coherent and logical response. Your own knowledge must ONLY be used to formulate fluent sentences and connect ideas, NOT to introduce any external information.
 
----Conversation History---
-{history}
+2. **Content & Grounding:**
+  - Strictly adhere to the provided context from the `Source Data`; DO NOT invent, assume, or infer any information not explicitly stated.
+  - If the answer cannot be found in the `Source Data`, state that you do not have enough information to answer. Do not attempt to guess.
 
----Knowledge Graph and Document Chunks---
-{context_data}
+3. **Formatting & Language:**
+  - The response MUST be in the same language as the user query.
+  - Use Markdown for clear formatting (e.g., headings, bold, lists).
+  - The response should be presented in {response_type}.
+  - Append a reference section at the end of the response.
+  - Merge citations that share the same file_path into one reference item.
+  - The main body of the response should exclude inline citations; all citation information should be listed exclusively in the references section.
 
----Response Guidelines---
-**1. Content & Adherence:**
-- Strictly adhere to the provided context from the Knowledge Base. Do not invent, assume, or include any information not present in the source data.
-- If the answer cannot be found in the provided context, state that you do not have enough information to answer.
-- Ensure the response maintains continuity with the conversation history.
+4. **Reference/Citation Format:**
+  - Append a reference section at the end of the response.
+  - The References section should be under a `### References` heading.
+  - Output the citation in the following formats:
+    - For a Knowledge Graph Entity: [EN] <entity>
+    - For a Knowledge Graph Relationship: [RE] <entity1> ~ <entity2>
+    - For a Document Chunk: [DC] <file_path>
+  - <entity>, <entity1>, <entity2>, and <file_path> should originate from attribute values in `Source Data` and be retained in their original language.
+  - Merge citations that share the same <file_path> into one reference item, disregarding their distinct IDs.
+  - Only include citations that directly reference the facts presented in the answer.
+  - Prioritize the most relevant references, and provide maximum of 6 most relevant citations.
+  - List each citation on an individual line.
 
-**2. Formatting & Language:**
-- Format the response using markdown with appropriate section headings.
-- The response language must in the same language as the user's question.
-- Target format and length: {response_type}
+5. **Example of Section:**
+```
+### References
+- [EN] LightRAG
+- [EN] Dual-Level Retrieval System
+- [RE] LightRAG ~ GraphRAG
+- [DC] Simple and Fast RAG.pdf
+- [DC] LightRAG Simple and Fast Alternative to GraphRAG for Legal Doc Analysis.md
+- [DC] Microsoft GraphRAG Technology Summary.md
+```
 
-**3. Citations / References:**
-- At the end of the response, under a "References" section, each citation must clearly indicate its origin (KG or DC).
-- The maximum number of citations is 5, including both KG and DC.
-- Use the following formats for citations:
-  - For a Knowledge Graph Entity: `[KG] <entity_name>`
-  - For a Knowledge Graph Relationship: `[KG] <entity1_name> - <entity2_name>`
-  - For a Document Chunk: `[DC] <file_path_or_document_name>`
+6. **Table Data Processing:** When Source Data contains tabular information:
+  - Preserve Exact Values: Maintain original numerical values and currency units from source data
+  - Table Formatting: Use Markdown table syntax to present structured data clearly
+  - Units and Currency: Always include original units (e.g., "新台幣仟元", "USD thousands")
+  - Mathematical Relationships: When source data shows calculations, preserve the relationship context
+  - Temporal Data: Maintain time period labels exactly as provided in source data
 
 ---USER CONTEXT---
 - Additional user prompt: {user_prompt}
 
----Response---
+---Source Data---
+Knowledge Graph and Document Chunks:
+
+{context_data}
+
+
 """
 
 PROMPTS["keywords_extraction"] = """---Role---
