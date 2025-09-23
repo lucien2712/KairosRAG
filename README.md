@@ -78,6 +78,11 @@ $$M(e_i, e_j) = \mathbb{I}[LLM_{confidence}("Should\ merge?", context(e_i, e_j))
 **Merge Operation:**
 $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 
+### 📊 **Table-Aware Document Processing**
+
+* **Problem**: HTML tables in documents get fragmented during traditional chunking, causing loss of structural relationships and data integrity that are crucial for understanding financial reports, research papers, and structured documents.
+* **Solution**: KairosRAG implements intelligent **table-aware chunking** that preserves complete `<table>...</table>` structures within single chunks, automatically includes surrounding context, and employs **table-enhanced entity extraction** with specialized prompts for tabular data.
+
 ---
 
 ## 🛠️ Installation
@@ -100,18 +105,18 @@ from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
 async def main():
     # Initialize KairosRAG
     rag = LightRAG(
-        working_dir="./data",
+        working_dir="./rag_storage",
         llm_model_func=gpt_4o_mini_complete,
         embedding_func=openai_embed,
     )
     await rag.initialize_storages()
     
     # Adaptive entity type discovery
-    rag.entity_type_aug("path")
+    rag.entity_type_aug("input_folder/")
 
     # Insert with automatic timestamp integration and agentic merging
     await rag.insert(
-        input=["Apple Q3 2024 earnings: iPhone revenue $39.3B, down 1.5% YoY..."],
+        input=[document],
         timestamps=["2024-Q3"],  # Auto-prefixed to descriptions
         file_paths=["apple_q3_2024.pdf"],
         agentic_merging=True,           # Enable automatic entity merging
@@ -124,7 +129,7 @@ async def main():
         param=QueryParam(
             mode="hybrid", 
             max_hop=2,              # Multi-hop traversal depth
-            max_neighbors=30,       # Max neighbor per node
+            top_neighbors=30,       # Max neighbor per node
             top_ppr_nodes=5,        # Top PageRank entities
             top_fastrp_nodes=5      # Top FastRP structural entities
         )
@@ -139,15 +144,16 @@ if __name__ == "__main__":
 
 ```bash
 # 1. Discover entity types for your domain
-rag.entity_type_aug("path")
+rag.entity_type_aug("input_folder/")
 
-# 2. Insert documents with timestamps
-rag.insert(docs, timestamps=["2024-Q3"], file_paths=["sample.pdf"], agentic_merging = True, agentic_merging_threshold = 0.8)
+# 2. Insert documents with timestamps (tables processed automatically)
+rag.insert(docs_with_tables, timestamps=["2024-Q3"], file_paths=["report.pdf"], agentic_merging=True, agentic_merging_threshold=0.8)
+# Note: HTML tables are automatically detected and processed with context preservation
 
 # 3. Query with three-perspective expansion
 response = rag.query(query, param=QueryParam(
     max_hop=2,           # Multi-hop traversal
-    max_neighbors=30,    # Max neighbor per node
+    top_neighbors=30,    # Top neighbor per node
     top_ppr_nodes=5,     # Personalized PageRank entities
     top_fastrp_nodes=5   # FastRP structural entities
 ))
@@ -163,6 +169,7 @@ KairosRAG extends **LightRAG** with:
 2. **Three-Perspective Expansion** – Multi-hop traversal, Personalized PageRank, and FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
+5. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.
 
 ---
 
