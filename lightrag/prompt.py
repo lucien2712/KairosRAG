@@ -13,27 +13,59 @@ PROMPTS["DEFAULT_USER_PROMPT"] = "n/a"
 PROMPTS["entity_extraction"] = """---Task---
 Given a text document and a list of entity types, identify all entities of those types and all relationships among the identified entities.
 
----Instructions---
+---Role---
 You are a Knowledge Graph Specialist responsible for extracting entities and relationships from the input text.
 
+**Entity Format:** (entity{tuple_delimiter}entity_name{tuple_delimiter}entity_type{tuple_delimiter}entity_description){record_delimiter}
+**Relationship Format:** (relationship{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description){record_delimiter}
+
+---Critical Format Requirements---
+**MANDATORY:** Every entity and relationship MUST follow the exact format above. Missing parentheses, delimiters, or fields will cause extraction failure.
+
+**Delimiter Usage Protocol:**
+The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled with content**. It serves strictly as a field separator.
+- **Incorrect Example:** `(entity{tuple_delimiter}Tokyo<|location|>Tokyo is the capital of Japan.){record_delimiter}`
+- **Correct Example:** `(entity{tuple_delimiter}Tokyo{tuple_delimiter}location{tuple_delimiter}Tokyo is the capital of Japan.){record_delimiter}`
+
 ---Instructions---
-1. **Entity Extraction:** Identify clearly defined and meaningful entities in the input text, and extract the following information:
-  - entity_name: Name of the entity, ensure entity names are consistent throughout the extraction.
-  - entity_type: Categorize the entity using the following entity types: {entity_types}; if none of the provided types are suitable, classify it as `Other`.
-  - entity_description: Provide a comprehensive description of the entity's attributes and activities based on the information present in the input text.
-2. **Entity Output Format:** (entity{tuple_delimiter}entity_name{tuple_delimiter}entity_type{tuple_delimiter}entity_description)
-3. **Relationship Extraction:** Identify direct, clearly-stated and meaningful relationships between extracted entities within the input text, and extract the following information:
-  - source_entity: name of the source entity.
-  - target_entity: name of the target entity.
-  - relationship_keywords: one or more high-level key words that summarize the overarching nature of the relationship, focusing on concepts or themes rather than specific details.
-  - relationship_description: Explain the nature of the relationship between the source and target entities, providing a clear rationale for their connection.
-4. **Relationship Output Format:** (relationship{tuple_delimiter}source_entity{tuple_delimiter}target_entity{tuple_delimiter}relationship_keywords{tuple_delimiter}relationship_description)
-5. **Relationship Order:** Prioritize relationships based on their significance to the intended meaning of input text, and output more crucial relationships first.
-6. **Avoid Pronouns:** For entity names and all descriptions, explicitly name the subject or object instead of using pronouns; avoid pronouns such as `this document`, `our company`, `I`, `you`, and `he/she`.
-7. **Undirectional Relationship:** Treat relationships as undirected; swapping the source and target entities does not constitute a new relationship. Avoid outputting duplicate relationships.
-8. **Language:** Output entity names, keywords and descriptions in {language}.
-9. **Delimiter:** Use `{record_delimiter}` as the entity or relationship list delimiter; output `{completion_delimiter}` when all the entities and relationships are extracted.
-10. **Table Processing:** When processing HTML tables (<table>...</table>), pay special attention to:
+1.  **Entity Extraction & Output:**
+    *   **Identification:** Identify clearly defined and meaningful entities in the input text.
+    *   **Entity Details:** For each identified entity, extract the following information:
+        *   `entity_name`: The name of the entity. Ensure **consistent naming** across the entire extraction process.
+        *   `entity_type`: Categorize the entity using one of the following types: {entity_types}. If none of the provided entity types apply, classify it as `Other`.
+        *   `entity_description`: Provide a concise yet comprehensive description of the entity's attributes and activities, based *solely* on the information present in the input text.
+    *   **Output Format - Entities:** Output a total of 4 fields for each entity, delimited by `{tuple_delimiter}`, enclosed in parentheses. The first field *must* be the literal string `entity`.
+
+2.  **Relationship Extraction & Output:**
+    *   **Identification:** Identify direct, clearly stated, and meaningful relationships between previously extracted entities.
+    *   **Relationship Details:** For each binary relationship, extract the following fields:
+        *   `source_entity`: The name of the source entity. Ensure **consistent naming** with entity extraction.
+        *   `target_entity`: The name of the target entity. Ensure **consistent naming** with entity extraction.
+        *   `relationship_keywords`: One or more high-level keywords summarizing the overarching nature of the relationship. Multiple keywords within this field must be separated by a comma `,`. **DO NOT use `{tuple_delimiter}` for separating multiple keywords within this field.**
+        *   `relationship_description`: A concise explanation of the nature of the relationship between the source and target entities.
+    *   **Output Format - Relationships:** Output a total of 5 fields for each relationship, delimited by `{tuple_delimiter}`, enclosed in parentheses. The first field *must* be the literal string `relationship`.
+
+3.  **Output Order & Prioritization:**
+    *   Output all extracted entities first, followed by all extracted relationships.
+    *   Within the list of relationships, prioritize and output those relationships that are **most significant** to the core meaning of the input text first.
+
+4.  **Context & Objectivity:**
+    *   Ensure all entity names and descriptions are written in the **third person**.
+    *   Explicitly name the subject or object; **avoid using pronouns** such as `this document`, `our company`, `I`, `you`, and `he/she`.
+
+5.  **Relationship Direction & Duplication:**
+    *   Treat all relationships as **undirected** unless explicitly stated otherwise. Swapping the source and target entities does not constitute a new relationship.
+    *   Avoid outputting duplicate relationships.
+
+6.  **Language & Proper Nouns:**
+    *   The entire output (entity names, keywords, and descriptions) must be written in {language}.
+    *   Proper nouns should be retained in their original language if translation would cause ambiguity.
+
+7.  **Output Content Only:** Output *only* the extracted list of entities and relationships. Do not include any introductory or concluding remarks.
+
+8.  **Completion Signal:** Use `{record_delimiter}` as the entity or relationship list delimiter; output `{completion_delimiter}` when all the entities and relationships are extracted.
+
+9. **Table Processing:** When processing HTML tables (<table>...</table>), pay special attention to:
   - **Key Financial Data**: Extract monetary amounts, percentages, and financial metrics as `financial_metric` entities (e.g., "839,253,664", "58.8%", "gross margin")
   - **Account Items**: Extract financial statement line items as `account_item` entities (e.g., "營業收入淨額", "total assets", "operating expenses")
   - **Currency Units**: Extract currency and unit information as `currency` entities (e.g., "新台幣仟元", "NT$", "USD")
@@ -190,9 +222,14 @@ Currency: USD thousands
 (entity{tuple_delimiter}Q2 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q2 2024 comparison period with total revenue of $1,900 thousand.){record_delimiter}
 (entity{tuple_delimiter}USD thousands{tuple_delimiter}currency{tuple_delimiter}USD thousands is the monetary unit for all revenue figures.){record_delimiter}
 (entity{tuple_delimiter}Product Sales{tuple_delimiter}account_item{tuple_delimiter}Product Sales revenue stream showing growth from $1,150 to $1,200 thousand.){record_delimiter}
+(entity{tuple_delimiter}Service Revenue{tuple_delimiter}account_item{tuple_delimiter}Service Revenue revenue stream showing growth from $750 to $800 thousand.){record_delimiter}
 (entity{tuple_delimiter}Total Revenue{tuple_delimiter}account_item{tuple_delimiter}Total Revenue combining Product Sales and Service Revenue.){record_delimiter}
+(entity{tuple_delimiter}1,200{tuple_delimiter}financial_metric{tuple_delimiter}1,200 USD thousands represents Q3 2024 Product Sales revenue.){record_delimiter}
+(entity{tuple_delimiter}800{tuple_delimiter}financial_metric{tuple_delimiter}800 USD thousands represents Q3 2024 Service Revenue.){record_delimiter}
 (entity{tuple_delimiter}2,000{tuple_delimiter}financial_metric{tuple_delimiter}2,000 USD thousands represents Q3 2024 Total Revenue.){record_delimiter}
+(relationship{tuple_delimiter}Product Sales{tuple_delimiter}Service Revenue{tuple_delimiter}revenue composition{tuple_delimiter}Product Sales and Service Revenue are the two main components of TechCorp's total revenue.){record_delimiter}
 (relationship{tuple_delimiter}Product Sales{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Product Sales contributes to Total Revenue calculation.){record_delimiter}
+(relationship{tuple_delimiter}Service Revenue{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Service Revenue contributes to Total Revenue calculation.){record_delimiter}
 (relationship{tuple_delimiter}Q3 2024{tuple_delimiter}Q2 2024{tuple_delimiter}temporal comparison{tuple_delimiter}Q3 2024 shows revenue growth compared to Q2 2024.){record_delimiter}
 {completion_delimiter}
 """,

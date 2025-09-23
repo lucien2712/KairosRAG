@@ -87,3 +87,5 @@ backup/
 config.py
 index.py
 query.py
+
+AGENTS.md
