@@ -19,7 +19,7 @@ where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatena
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with IRF+PMI weighting.
+* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with edge weights.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Architecture Overview:**
@@ -28,7 +28,7 @@ The system processes each query through three independent perspectives and merge
 
 1. **Multi-hop Semantic Expansion**: Traditional graph traversal based on query-entity similarity
 2. **Global Importance Analysis**: PageRank-based ranking of entities relative to seed nodes  
-3. **Adaptive Structural Analysis**: Enhanced FastRP with IRF+PMI smart weighting for keywords-aware embeddings
+3. **Adaptive Structural Analysis**: Enhanced FastRP with edge weights for structure-aware embeddings
 
 **Mathematical Framework:**
 
@@ -44,16 +44,13 @@ $$PPR(v; S) = (1-d) \cdot p_S(v) + d \cdot \sum_{u \to v} \frac{PPR(u; S)}{|out(
 
 where $S$ = seed entities, $d = 0.85$ (damping factor)
 
-**Adaptive FastRP with Smart Weights:**
+**Adaptive FastRP with Edge Weights:**
 $$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
 
-where $S = D^{-1/2}A_{smart}D^{-1/2}$, $A_{smart}$ uses IRF×PMI edge weights
+where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edge weights
 
-**Smart Weight Formula:**
-$$W_{edge} = IRF(keywords) \times PMI(e_1, e_2, keywords)$$
-
-- **IRF**: $\log(1 + \frac{N}{1 + freq(kw)})$ - identifies rare vs common keywords
-- **PMI**: $\log(\frac{P(e_1,e_2|kw)}{P(e_1|kw) \cdot P(e_2|kw)})$ - measures semantic association strength
+**Edge Weight Integration:**
+The Adaptive FastRP algorithm uses edge weights from the original Graph knowledge graph construction, preserving relationship importance established during insertion time.
 
 ### 🧠 **Adaptive Entity Type Discovery**
 
