@@ -2864,7 +2864,7 @@ def _calculate_relevance_scores_vectorized(
 async def _precompute_adaptive_fastrp_weights(knowledge_graph_inst):
     """Precompute Adaptive FastRP weights if not already computed."""
     try:
-        from .gnn.keywords_smart_weights import AdaptiveFastRPCalculator
+        from .gnn.keyword_based_edge_weights import AdaptiveFastRPCalculator
 
         # Check if weights already computed by sampling a few edges
         edges = await knowledge_graph_inst.get_all_edges()
@@ -2877,10 +2877,10 @@ async def _precompute_adaptive_fastrp_weights(knowledge_graph_inst):
                     sample_edges.append((src, tgt))
 
         if sample_edges:
-            # Check if smart_weight exists in any edge
+            # Check if weight exists in any edge
             for src, tgt in sample_edges:
                 edge_data = await knowledge_graph_inst.get_edge(src, tgt)
-                if edge_data and 'smart_weight' in edge_data:
+                if edge_data and 'weight' in edge_data:
                     logger.debug("Adaptive FastRP weights already computed, skipping...")
                     return
 
@@ -3160,7 +3160,7 @@ async def _independent_fastrp_analysis(
 async def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], graph) -> float:
     """Compute Adaptive FastRP similarity using keywords-aware weights."""
     try:
-        from .gnn.keywords_smart_weights import compute_adaptive_fastrp_similarity
+        from .gnn.keyword_based_edge_weights import compute_adaptive_fastrp_similarity
         return await compute_adaptive_fastrp_similarity(target_entity, seed_entities, graph)
     except Exception as e:
         logger.error(f"Error computing keywords smart similarity: {e}")

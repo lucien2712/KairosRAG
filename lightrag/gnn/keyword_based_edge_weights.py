@@ -95,11 +95,11 @@ class AdaptiveFastRPCalculator:
             pmi_score = self._compute_automated_pmi(src, tgt, edge_data.get('keywords', ''))
 
             # 組合權重 (移除時間衰減)
-            smart_weight = irf_score * pmi_score
-            smart_weight = max(0.1, min(5.0, smart_weight))  # 自動歸一化
+            weight = irf_score * pmi_score
+            weight = max(0.1, min(5.0, weight))  # 自動歸一化
 
             # 更新邊權重
-            edge_data['smart_weight'] = smart_weight
+            edge_data['weight'] = weight
             await graph.upsert_edge(src, tgt, edge_data)
 
     def _parse_keywords(self, keywords_str: str) -> List[str]:
@@ -205,7 +205,7 @@ class AdaptiveFastRPCalculator:
 async def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[str], graph) -> float:
     """
     Adaptive FastRP 相似度計算
-    基於邊的 smart_weight 屬性，自適應關係語義
+    基於邊的 weight 屬性，自適應關係語義
     """
     try:
         similarities = []
@@ -218,8 +218,8 @@ async def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: 
             for src, tgt in [(target_entity, seed_entity), (seed_entity, target_entity)]:
                 try:
                     edge_data = await graph.get_edge(src, tgt)
-                    if edge_data and 'smart_weight' in edge_data:
-                        direct_weight = max(direct_weight, edge_data['smart_weight'])
+                    if edge_data and 'weight' in edge_data:
+                        direct_weight = max(direct_weight, edge_data['weight'])
                 except:
                     continue
 
@@ -240,8 +240,8 @@ async def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: 
                             # 獲取兩條邊的權重
                             e1 = await graph.get_edge(target_entity, neighbor) or {}
                             e2 = await graph.get_edge(seed_entity, neighbor) or {}
-                            w1 = e1.get('smart_weight', 0.1)
-                            w2 = e2.get('smart_weight', 0.1)
+                            w1 = e1.get('weight', 0.1)
+                            w2 = e2.get('weight', 0.1)
                             # 使用幾何平均作為間接權重
                             indirect_weights.append(np.sqrt(w1 * w2))
 

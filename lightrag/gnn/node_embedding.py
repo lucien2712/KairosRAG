@@ -117,8 +117,8 @@ class NodeEmbeddingEnhancer:
             tgt = str(relation.get('tgt_id', ''))
             
             if src and tgt and src in graph.nodes() and tgt in graph.nodes():
-                # Use smart_weight if available, otherwise default to 1.0
-                weight = relation.get('smart_weight', 1.0)
+                # Use weight if available, otherwise default to 1.0
+                weight = relation.get('weight', 1.0)
                 graph.add_edge(src, tgt, weight=weight)
                 
         logger.info(f"Built graph with {len(graph.nodes())} nodes, {len(graph.edges())} edges")
