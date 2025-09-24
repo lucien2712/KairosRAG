@@ -66,13 +66,14 @@ The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled wi
 8.  **Completion Signal:** Use `{record_delimiter}` as the entity or relationship list delimiter; output `{completion_delimiter}` when all the entities and relationships are extracted.
 
 9. **Table Processing:** When processing HTML tables (<table>...</table>), pay special attention to:
-  - **Key Financial Data**: Extract monetary amounts, percentages, and financial metrics as `financial_metric` entities (e.g., "839,253,664", "58.8%", "gross margin")
-  - **Account Items**: Extract financial statement line items as `account_item` entities (e.g., "營業收入淨額", "total assets", "operating expenses")
-  - **Currency Units**: Extract currency and unit information as `currency` entities (e.g., "新台幣仟元", "NT$", "USD")
-  - **Calculation Relationships**: Establish mathematical relationships between related financial data (e.g., gross profit = revenue - cost)
-  - **Time Comparisons**: Link financial data to appropriate time periods using `temporal_range` entities
-  - **Table Structure**: Recognize hierarchical relationships within table categories and subcategories
-  - **Focus on Key Data**: Prioritize extraction of significant financial metrics over comprehensive coverage
+    - **Table Headers**: Extract significant column and row names as they often represent key dimensions, categories, or time periods.
+    - **Quantitative Data**: Extract numerical values, percentages, and metrics.
+    - **Categorical Items**: Extract classification terms, labels, and structured categories.
+    - **Units and Standards**: Extract measurement units, currencies, or standardization information.
+    - **Temporal Information**: Link data to relevant time periods, dates, or versions.
+    - **Hierarchical Structure**: Recognize relationships within table categories and subcategories.
+    - **Key Information Priority**: Focus on extracting the most significant data points rather than comprehensive coverage.
+    - **Caption and Title Context**: Table captions, titles, and metadata that may appear before or after `<table></table>` tags.
 
 ---Examples---
 {examples}
@@ -153,17 +154,17 @@ Financial experts are closely watching the Federal Reserve's next move, as specu
 Entity_types: [organization,person,location,event,technology,equiment,product,Document,category]
 Text:
 ```
-在台北舉行的人工智能大會上，騰訊公司的首席技術官張偉發布了最新的大語言模型「騰訊智言」，該模型在自然語言處理方面取得了重大突破。
+在北京舉行的人工智能大會上，騰訊公司的首席技術官張偉發布了最新的大語言模型「騰訊智言」，該模型在自然語言處理方面取得了重大突破。
 ```
 
 ---Output---
-(entity{tuple_delimiter}人工智能大會{tuple_delimiter}event{tuple_delimiter}人工智能大會是在台北舉行的技術會議，專注於人工智能領域的最新發展，騰訊公司在此發布了新產品。){record_delimiter}
-(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}台北是人工智能大會的舉辦城市，見證了騰訊智言大語言模型的重要發布。){record_delimiter}
+(entity{tuple_delimiter}人工智能大會{tuple_delimiter}event{tuple_delimiter}人工智能大會是在北京舉行的技術會議，專注於人工智能領域的最新發展，騰訊公司在此發布了新產品。){record_delimiter}
+(entity{tuple_delimiter}北京{tuple_delimiter}location{tuple_delimiter}北京是人工智能大會的舉辦城市，見證了騰訊智言大語言模型的重要發布。){record_delimiter}
 (entity{tuple_delimiter}騰訊公司{tuple_delimiter}organization{tuple_delimiter}騰訊公司是參與人工智能大會的科技企業，透過首席技術官張偉發布了新的大語言模型產品。){record_delimiter}
-(entity{tuple_delimiter}張偉{tuple_delimiter}person{tuple_delimiter}張偉是騰訊公司的首席技術官，在台北舉行的人工智能大會上發布了騰訊智言產品。){record_delimiter}
+(entity{tuple_delimiter}張偉{tuple_delimiter}person{tuple_delimiter}張偉是騰訊公司的首席技術官，在北京舉行的人工智能大會上發布了騰訊智言產品。){record_delimiter}
 (entity{tuple_delimiter}騰訊智言{tuple_delimiter}product{tuple_delimiter}騰訊智言是騰訊公司在人工智能大會上發布的大語言模型產品，在自然語言處理方面取得了重大突破。){record_delimiter}
 (entity{tuple_delimiter}自然語言處理技術{tuple_delimiter}technology{tuple_delimiter}自然語言處理技術是騰訊智言模型取得重大突破的技術領域，展現了最新發展成果。){record_delimiter}
-(relationship{tuple_delimiter}人工智能大會{tuple_delimiter}北京{tuple_delimiter}會議地點, 舉辦關係{tuple_delimiter}人工智能大會在台北舉行，成為騰訊等科技企業展示最新技術的重要平台。){record_delimiter}
+(relationship{tuple_delimiter}人工智能大會{tuple_delimiter}北京{tuple_delimiter}會議地點, 舉辦關係{tuple_delimiter}人工智能大會在北京舉行，成為騰訊等科技企業展示最新技術的重要平台。){record_delimiter}
 (relationship{tuple_delimiter}張偉{tuple_delimiter}騰訊公司{tuple_delimiter}雇傭關係, 高管職位{tuple_delimiter}張偉擔任騰訊公司的首席技術官，代表公司在人工智能大會上進行重要產品發布。){record_delimiter}
 (relationship{tuple_delimiter}張偉{tuple_delimiter}騰訊智言{tuple_delimiter}產品發布, 技術展示{tuple_delimiter}張偉在人工智能大會上發布了騰訊智言大語言模型，展示了公司在AI領域的技術實力。){record_delimiter}
 (relationship{tuple_delimiter}騰訊智言{tuple_delimiter}自然語言處理技術{tuple_delimiter}技術應用, 突破創新{tuple_delimiter}騰訊智言在自然語言處理技術方面取得了重大突破，代表了該領域的最新進展。){record_delimiter}
@@ -267,7 +268,6 @@ Text:
 (entity{tuple_delimiter}839,253,664{tuple_delimiter}financial_metric{tuple_delimiter}839,253,664新台幣仟元是民國114年第一季營業收入淨額，比前年同期大幅增長。){record_delimiter}
 (entity{tuple_delimiter}493,395,076{tuple_delimiter}financial_metric{tuple_delimiter}493,395,076新台幣仟元是民國114年第一季營業毛利，顯示強勁獲利能力。){record_delimiter}
 (relationship{tuple_delimiter}營業收入淨額{tuple_delimiter}營業成本{tuple_delimiter}財務計算, 毛利基礎{tuple_delimiter}營業毛利通過營業收入淨額減去營業成本計算得出。){record_delimiter}
-(relationship{tuple_delimiter}839,253,664{tuple_delimiter}345,858,588{tuple_delimiter}數學關係, 毛利計算{tuple_delimiter}營業毛利493,395,076為營業收入839,253,664減去營業成本345,858,588的結果。){record_delimiter}
 (relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
 {completion_delimiter}
 
