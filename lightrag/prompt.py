@@ -73,7 +73,7 @@ The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled wi
     - **Temporal Information**: Link data to relevant time periods, dates, or versions.
     - **Hierarchical Structure**: Recognize relationships within table categories and subcategories.
     - **Key Information Priority**: Focus on extracting the most significant data points rather than comprehensive coverage.
-    - **Caption and Title Context**: Table captions, titles, and metadata that may appear before or after `<table></table>` tags.
+    - **Caption and Title Context**: Extract table captions, titles, and metadata appearing outside `<table></table>` tags for additional context.
 
 ---Examples---
 {examples}
@@ -225,9 +225,9 @@ Currency: USD thousands
 (entity{tuple_delimiter}Product Sales{tuple_delimiter}account_item{tuple_delimiter}Product Sales revenue stream showing growth from $1,150 to $1,200 thousand.){record_delimiter}
 (entity{tuple_delimiter}Service Revenue{tuple_delimiter}account_item{tuple_delimiter}Service Revenue revenue stream showing growth from $750 to $800 thousand.){record_delimiter}
 (entity{tuple_delimiter}Total Revenue{tuple_delimiter}account_item{tuple_delimiter}Total Revenue combining Product Sales and Service Revenue.){record_delimiter}
-(entity{tuple_delimiter}1,200{tuple_delimiter}financial_metric{tuple_delimiter}1,200 USD thousands represents Q3 2024 Product Sales revenue.){record_delimiter}
-(entity{tuple_delimiter}800{tuple_delimiter}financial_metric{tuple_delimiter}800 USD thousands represents Q3 2024 Service Revenue.){record_delimiter}
-(entity{tuple_delimiter}2,000{tuple_delimiter}financial_metric{tuple_delimiter}2,000 USD thousands represents Q3 2024 Total Revenue.){record_delimiter}
+(entity{tuple_delimiter}Product Sales $1,200K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Product Sales revenue of $1,200 thousand USD.){record_delimiter}
+(entity{tuple_delimiter}Service Revenue $800K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Service Revenue of $800 thousand USD.){record_delimiter}
+(entity{tuple_delimiter}Total Revenue $2,000K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Total Revenue of $2,000 thousand USD.){record_delimiter}
 (relationship{tuple_delimiter}Product Sales{tuple_delimiter}Service Revenue{tuple_delimiter}revenue composition{tuple_delimiter}Product Sales and Service Revenue are the two main components of TechCorp's total revenue.){record_delimiter}
 (relationship{tuple_delimiter}Product Sales{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Product Sales contributes to Total Revenue calculation.){record_delimiter}
 (relationship{tuple_delimiter}Service Revenue{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Service Revenue contributes to Total Revenue calculation.){record_delimiter}
@@ -265,8 +265,8 @@ Text:
 (entity{tuple_delimiter}營業收入淨額{tuple_delimiter}account_item{tuple_delimiter}營業收入淨額是損益表的首要科目，代表公司主要營業活動的收入。){record_delimiter}
 (entity{tuple_delimiter}營業成本{tuple_delimiter}account_item{tuple_delimiter}營業成本是製造和銷售產品的直接成本，影響毛利率計算。){record_delimiter}
 (entity{tuple_delimiter}營業毛利{tuple_delimiter}account_item{tuple_delimiter}營業毛利是營業收入減去營業成本的結果，反映核心營運獲利能力。){record_delimiter}
-(entity{tuple_delimiter}839,253,664{tuple_delimiter}financial_metric{tuple_delimiter}839,253,664新台幣仟元是民國114年第一季營業收入淨額，比前年同期大幅增長。){record_delimiter}
-(entity{tuple_delimiter}493,395,076{tuple_delimiter}financial_metric{tuple_delimiter}493,395,076新台幣仟元是民國114年第一季營業毛利，顯示強勁獲利能力。){record_delimiter}
+(entity{tuple_delimiter}營業收入淨額$839,253K{tuple_delimiter}financial_metric{tuple_delimiter}民國114年第一季營業收入淨額839,253,664新台幣仟元，比前年同期大幅增長。){record_delimiter}
+(entity{tuple_delimiter}營業毛利$493,395K{tuple_delimiter}financial_metric{tuple_delimiter}民國114年第一季營業毛利493,395,076新台幣仟元，顯示強勁獲利能力。){record_delimiter}
 (relationship{tuple_delimiter}營業收入淨額{tuple_delimiter}營業成本{tuple_delimiter}財務計算, 毛利基礎{tuple_delimiter}營業毛利通過營業收入淨額減去營業成本計算得出。){record_delimiter}
 (relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
 {completion_delimiter}
