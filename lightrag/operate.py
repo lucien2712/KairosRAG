@@ -2867,7 +2867,15 @@ async def _precompute_adaptive_fastrp_weights(knowledge_graph_inst):
         from .gnn.keywords_smart_weights import AdaptiveFastRPCalculator
 
         # Check if weights already computed by sampling a few edges
-        sample_edges = await knowledge_graph_inst.get_edges_by_limit(limit=3)
+        edges = await knowledge_graph_inst.get_all_edges()
+        sample_edges = []
+        if edges:
+            for e in edges[:3]:
+                src = e.get("source") if isinstance(e, dict) else (e[0] if len(e) > 0 else None)
+                tgt = e.get("target") if isinstance(e, dict) else (e[1] if len(e) > 1 else None)
+                if src and tgt:
+                    sample_edges.append((src, tgt))
+
         if sample_edges:
             # Check if smart_weight exists in any edge
             for src, tgt in sample_edges:
@@ -3112,7 +3120,7 @@ async def _independent_fastrp_analysis(
         smart_candidates = []
         for entity_name in candidate_entities:
             try:
-                adaptive_fastrp_similarity = _compute_adaptive_fastrp_similarity(
+                adaptive_fastrp_similarity = await _compute_adaptive_fastrp_similarity(
                     entity_name, seed_entity_names, knowledge_graph_inst
                 )
                 
@@ -3149,11 +3157,11 @@ async def _independent_fastrp_analysis(
 
 
 
-def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], graph) -> float:
+async def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], graph) -> float:
     """Compute Adaptive FastRP similarity using keywords-aware weights."""
     try:
         from .gnn.keywords_smart_weights import compute_adaptive_fastrp_similarity
-        return compute_adaptive_fastrp_similarity(target_entity, seed_entities, graph)
+        return await compute_adaptive_fastrp_similarity(target_entity, seed_entities, graph)
     except Exception as e:
         logger.error(f"Error computing keywords smart similarity: {e}")
         return 0.0

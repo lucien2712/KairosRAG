@@ -44,7 +44,7 @@ class AdaptiveFastRPCalculator:
 
         logger.info(f"Smart weights computed for {self.total_edges} edges")
         logger.info(f"Discovered {len(self.keyword_frequencies)} unique keywords")
-        logger.info(f"Top 5 keywords: {dict(self.keyword_frequencies.most_common(5))}")
+        # logger.info(f"Top 5 keywords: {dict(self.keyword_frequencies.most_common(5))}")
 
     async def _collect_graph_statistics(self, graph):
         """收集圖的統計數據用於 IRF 和 PMI 計算"""
@@ -53,7 +53,11 @@ class AdaptiveFastRPCalculator:
         edges = await graph.get_all_edges()
         self.total_edges = len(edges)
 
-        for src, tgt in edges:
+        for e in edges:
+            src = e.get('source') if isinstance(e, dict) else (e[0] if len(e) > 0 else None)
+            tgt = e.get('target') if isinstance(e, dict) else (e[1] if len(e) > 1 else None)
+            if not src or not tgt:
+                continue
             edge_data = await graph.get_edge(src, tgt)
             keywords_str = edge_data.get('keywords', '')
 
@@ -79,7 +83,11 @@ class AdaptiveFastRPCalculator:
         """計算所有邊的智能權重"""
         edges = await graph.get_all_edges()
 
-        for src, tgt in edges:
+        for e in edges:
+            src = e.get('source') if isinstance(e, dict) else (e[0] if len(e) > 0 else None)
+            tgt = e.get('target') if isinstance(e, dict) else (e[1] if len(e) > 1 else None)
+            if not src or not tgt:
+                continue
             edge_data = await graph.get_edge(src, tgt)
 
             # 計算智能權重
@@ -193,21 +201,8 @@ class AdaptiveFastRPCalculator:
         return result
 
 
-    def get_keyword_statistics(self) -> Dict[str, Any]:
-        """獲取關鍵詞統計資訊用於調試"""
-        return {
-            "total_keywords": len(self.keyword_frequencies),
-            "total_edges": self.total_edges,
-            "top_keywords": dict(self.keyword_frequencies.most_common(10)),
-            "keyword_distribution": {
-                "high_frequency (>20)": len([k for k, v in self.keyword_frequencies.items() if v > 20]),
-                "medium_frequency (5-20)": len([k for k, v in self.keyword_frequencies.items() if 5 <= v <= 20]),
-                "low_frequency (<5)": len([k for k, v in self.keyword_frequencies.items() if v < 5])
-            }
-        }
 
-
-def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[str], graph) -> float:
+async def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[str], graph) -> float:
     """
     Adaptive FastRP 相似度計算
     基於邊的 smart_weight 屬性，自適應關係語義
@@ -222,7 +217,7 @@ def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[s
             # 檢查雙向連接
             for src, tgt in [(target_entity, seed_entity), (seed_entity, target_entity)]:
                 try:
-                    edge_data = graph.get_edge_data(src, tgt)
+                    edge_data = await graph.get_edge(src, tgt)
                     if edge_data and 'smart_weight' in edge_data:
                         direct_weight = max(direct_weight, edge_data['smart_weight'])
                 except:
@@ -233,16 +228,20 @@ def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[s
             else:
                 # 透過共同鄰居的間接相似度
                 try:
-                    target_neighbors = set(graph.neighbors(target_entity))
-                    seed_neighbors = set(graph.neighbors(seed_entity))
+                    target_edges = await graph.get_node_edges(target_entity) or []
+                    seed_edges = await graph.get_node_edges(seed_entity) or []
+                    target_neighbors = {t if s == target_entity else s for s, t in target_edges}
+                    seed_neighbors = {t if s == seed_entity else s for s, t in seed_edges}
                     common_neighbors = target_neighbors & seed_neighbors
 
                     if common_neighbors:
                         indirect_weights = []
                         for neighbor in common_neighbors:
                             # 獲取兩條邊的權重
-                            w1 = graph.get_edge_data(target_entity, neighbor, {}).get('smart_weight', 0.1)
-                            w2 = graph.get_edge_data(seed_entity, neighbor, {}).get('smart_weight', 0.1)
+                            e1 = await graph.get_edge(target_entity, neighbor) or {}
+                            e2 = await graph.get_edge(seed_entity, neighbor) or {}
+                            w1 = e1.get('smart_weight', 0.1)
+                            w2 = e2.get('smart_weight', 0.1)
                             # 使用幾何平均作為間接權重
                             indirect_weights.append(np.sqrt(w1 * w2))
 
@@ -251,7 +250,7 @@ def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[s
                 except:
                     pass
 
-        return np.mean(similarities) if similarities else 0.0
+        return float(np.mean(similarities)) if similarities else 0.0
 
     except Exception as e:
         logger.error(f"Error computing keywords smart similarity: {e}")
