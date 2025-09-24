@@ -2002,8 +2002,6 @@ async def merge_nodes_and_edges(
     # Compute and store enhanced embeddings if node embedding is enabled
     if global_config.get("enable_node_embedding", False) and global_config.get("node_embedding"):
         try:
-            logger.info("Computing enhanced embeddings with FastRP + PageRank")
-            
             # Prepare entities and relations data for graph construction
             entities_data = []
             relations_data = []
