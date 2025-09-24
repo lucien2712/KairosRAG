@@ -222,12 +222,9 @@ Currency: USD thousands
 (entity{tuple_delimiter}Q3 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q3 2024 reporting period with total revenue of $2,000 thousand.){record_delimiter}
 (entity{tuple_delimiter}Q2 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q2 2024 comparison period with total revenue of $1,900 thousand.){record_delimiter}
 (entity{tuple_delimiter}USD thousands{tuple_delimiter}currency{tuple_delimiter}USD thousands is the monetary unit for all revenue figures.){record_delimiter}
-(entity{tuple_delimiter}Product Sales{tuple_delimiter}account_item{tuple_delimiter}Product Sales revenue stream showing growth from $1,150 to $1,200 thousand.){record_delimiter}
-(entity{tuple_delimiter}Service Revenue{tuple_delimiter}account_item{tuple_delimiter}Service Revenue revenue stream showing growth from $750 to $800 thousand.){record_delimiter}
-(entity{tuple_delimiter}Total Revenue{tuple_delimiter}account_item{tuple_delimiter}Total Revenue combining Product Sales and Service Revenue.){record_delimiter}
-(entity{tuple_delimiter}Product Sales $1,200K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Product Sales revenue of $1,200 thousand USD.){record_delimiter}
-(entity{tuple_delimiter}Service Revenue $800K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Service Revenue of $800 thousand USD.){record_delimiter}
-(entity{tuple_delimiter}Total Revenue $2,000K{tuple_delimiter}financial_metric{tuple_delimiter}Q3 2024 Total Revenue of $2,000 thousand USD.){record_delimiter}
+(entity{tuple_delimiter}Product Sales{tuple_delimiter}financial_metric{tuple_delimiter}Product Sales revenue demonstrating growth from $1,150 thousand in Q2 2024 to $1,200 thousand in Q3 2024, representing a 4.3% quarter-over-quarter increase and strong product demand.){record_delimiter}
+(entity{tuple_delimiter}Service Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Service Revenue showing robust growth from $750 thousand in Q2 2024 to $800 thousand in Q3 2024, achieving a 6.7% quarterly improvement and reflecting expanding service offerings.){record_delimiter}
+(entity{tuple_delimiter}Total Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Total Revenue increased from $1,900 thousand in Q2 2024 to $2,000 thousand in Q3 2024, delivering overall business growth of 5.3% and demonstrating TechCorp's consistent performance trajectory.){record_delimiter}
 (relationship{tuple_delimiter}Product Sales{tuple_delimiter}Service Revenue{tuple_delimiter}revenue composition{tuple_delimiter}Product Sales and Service Revenue are the two main components of TechCorp's total revenue.){record_delimiter}
 (relationship{tuple_delimiter}Product Sales{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Product Sales contributes to Total Revenue calculation.){record_delimiter}
 (relationship{tuple_delimiter}Service Revenue{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Service Revenue contributes to Total Revenue calculation.){record_delimiter}
@@ -262,11 +259,9 @@ Text:
 (entity{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國114年第一季報告期間，對應公司最新的財務表現。){record_delimiter}
 (entity{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國113年第一季比較期間，用於分析公司年度變化趨勢。){record_delimiter}
 (entity{tuple_delimiter}新台幣仟元{tuple_delimiter}currency{tuple_delimiter}新台幣仟元是財務報表的主要計價單位，用於表示金額數據。){record_delimiter}
-(entity{tuple_delimiter}營業收入淨額{tuple_delimiter}account_item{tuple_delimiter}營業收入淨額是損益表的首要科目，代表公司主要營業活動的收入。){record_delimiter}
-(entity{tuple_delimiter}營業成本{tuple_delimiter}account_item{tuple_delimiter}營業成本是製造和銷售產品的直接成本，影響毛利率計算。){record_delimiter}
-(entity{tuple_delimiter}營業毛利{tuple_delimiter}account_item{tuple_delimiter}營業毛利是營業收入減去營業成本的結果，反映核心營運獲利能力。){record_delimiter}
-(entity{tuple_delimiter}營業收入淨額$839,253K{tuple_delimiter}financial_metric{tuple_delimiter}民國114年第一季營業收入淨額839,253,664新台幣仟元，比前年同期大幅增長。){record_delimiter}
-(entity{tuple_delimiter}營業毛利$493,395K{tuple_delimiter}financial_metric{tuple_delimiter}民國114年第一季營業毛利493,395,076新台幣仟元，顯示強勁獲利能力。){record_delimiter}
+(entity{tuple_delimiter}營業收入淨額{tuple_delimiter}financial_metric{tuple_delimiter}營業收入淨額從民國113年第一季的592,644,201新台幣仟元大幅增長至民國114年第一季的839,253,664新台幣仟元，年增長率達41.6%，顯示台積公司強勁的營運表現和市場需求成長。){record_delimiter}
+(entity{tuple_delimiter}營業成本{tuple_delimiter}financial_metric{tuple_delimiter}營業成本從民國113年第一季的268,447,198新台幣仟元增至民國114年第一季的345,858,588新台幣仟元，年增長率28.9%，反映產能擴張和原材料成本上升。){record_delimiter}
+(entity{tuple_delimiter}營業毛利{tuple_delimiter}financial_metric{tuple_delimiter}營業毛利從民國113年第一季的324,197,003新台幣仟元躍升至民國114年第一季的493,395,076新台幣仟元，年增長率高達52.2%，展現優異的獲利能力提升和營運效率改善。){record_delimiter}
 (relationship{tuple_delimiter}營業收入淨額{tuple_delimiter}營業成本{tuple_delimiter}財務計算, 毛利基礎{tuple_delimiter}營業毛利通過營業收入淨額減去營業成本計算得出。){record_delimiter}
 (relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
 {completion_delimiter}
