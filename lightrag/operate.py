@@ -2861,37 +2861,6 @@ def _calculate_relevance_scores_vectorized(
     return final_scores.tolist()
 
 
-async def _precompute_adaptive_fastrp_weights(knowledge_graph_inst):
-    """Precompute Adaptive FastRP weights if not already computed."""
-    try:
-        from .gnn.keyword_based_edge_weights import AdaptiveFastRPCalculator
-
-        # Check if weights already computed by sampling a few edges
-        edges = await knowledge_graph_inst.get_all_edges()
-        sample_edges = []
-        if edges:
-            for e in edges[:3]:
-                src = e.get("source") if isinstance(e, dict) else (e[0] if len(e) > 0 else None)
-                tgt = e.get("target") if isinstance(e, dict) else (e[1] if len(e) > 1 else None)
-                if src and tgt:
-                    sample_edges.append((src, tgt))
-
-        if sample_edges:
-            # Check if weight exists in any edge
-            for src, tgt in sample_edges:
-                edge_data = await knowledge_graph_inst.get_edge(src, tgt)
-                if edge_data and 'weight' in edge_data:
-                    logger.debug("Adaptive FastRP weights already computed, skipping...")
-                    return
-
-        # Weights not found, compute them
-        logger.info("Computing Adaptive FastRP weights for all edges...")
-        calculator = AdaptiveFastRPCalculator()
-        await calculator.precompute_weights(knowledge_graph_inst)
-        logger.info("Adaptive FastRP weights computation completed")
-
-    except Exception as e:
-        logger.error(f"Failed to precompute Adaptive FastRP weights: {e}")
 
 
 def _allocate_expansion_resources(total_neighbors: int, top_fastrp_nodes: int) -> tuple[int, int]:
@@ -2959,9 +2928,6 @@ async def _semantic_expansion_plus_structural_analysis(
 
     logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + adaptive_fastrp({query_param.top_fastrp_nodes})")
 
-    # Precompute Adaptive FastRP weights if needed
-    if query_param.top_fastrp_nodes > 0:
-        await _precompute_adaptive_fastrp_weights(knowledge_graph_inst)
 
     # Create params for multi-hop expansion (keeps original top_neighbors)
     multihop_param = QueryParam(
@@ -3036,11 +3002,11 @@ async def _independent_ppr_analysis(
             return []
         
         logger.info(f"PPR analysis from {len(seed_entity_names)} seed entities")
-        
-        # Compute Personalized PageRank scores
+
+        # Compute Personalized PageRank based on seed entities
         ppr_scores = node_embedding.compute_personalized_pagerank(seed_entity_names)
         if not ppr_scores:
-            logger.warning("No PPR scores computed")
+            logger.warning("No Personalized PageRank scores computed")
             return []
         
         # Get all entities (excluding seeds) and sort by PPR score
@@ -3120,8 +3086,8 @@ async def _independent_fastrp_analysis(
         smart_candidates = []
         for entity_name in candidate_entities:
             try:
-                adaptive_fastrp_similarity = await _compute_adaptive_fastrp_similarity(
-                    entity_name, seed_entity_names, knowledge_graph_inst
+                adaptive_fastrp_similarity = _compute_adaptive_fastrp_similarity(
+                    entity_name, seed_entity_names, node_embedding
                 )
                 
                 # Get entity details from knowledge graph
@@ -3157,20 +3123,13 @@ async def _independent_fastrp_analysis(
 
 
 
-async def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], graph) -> float:
-    """Compute Adaptive FastRP similarity using keywords-aware weights."""
+def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], node_embedding) -> float:
+    """Compute Adaptive FastRP similarity using precomputed embeddings."""
     try:
-        from .gnn.keyword_based_edge_weights import compute_adaptive_fastrp_similarity
-        return await compute_adaptive_fastrp_similarity(target_entity, seed_entities, graph)
+        from lightrag.gnn.structural_similarity import compute_adaptive_fastrp_similarity
+        return compute_adaptive_fastrp_similarity(target_entity, seed_entities, node_embedding)
     except Exception as e:
-        logger.error(f"Error computing keywords smart similarity: {e}")
-        return 0.0
-                    
-        # Return average similarity to all seed entities
-        return sum(similarities) / len(similarities) if similarities else 0.0
-        
-    except Exception as e:
-        logger.debug(f"Error computing FastRP similarity: {e}")
+        logger.error(f"Error computing adaptive fastrp similarity: {e}")
         return 0.0
 
 
