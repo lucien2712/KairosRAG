@@ -19,7 +19,7 @@ where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatena
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through FastRP embeddings.
+* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with IRF+PMI weighting.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Architecture Overview:**
@@ -28,7 +28,7 @@ The system processes each query through three independent perspectives and merge
 
 1. **Multi-hop Semantic Expansion**: Traditional graph traversal based on query-entity similarity
 2. **Global Importance Analysis**: PageRank-based ranking of entities relative to seed nodes  
-3. **Structural Pattern Analysis**: FastRP embeddings for discovering structurally similar entities
+3. **Adaptive Structural Analysis**: Enhanced FastRP with IRF+PMI smart weighting for keywords-aware embeddings
 
 **Mathematical Framework:**
 
@@ -44,10 +44,16 @@ $$PPR(v; S) = (1-d) \cdot p_S(v) + d \cdot \sum_{u \to v} \frac{PPR(u; S)}{|out(
 
 where $S$ = seed entities, $d = 0.85$ (damping factor)
 
-**FastRP Structural Similarity:**
-$$FastRP(G) = D^r \cdot (D^{-1/2}AD^{-1/2})^k \cdot R$$
+**Adaptive FastRP with Smart Weights:**
+$$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
 
-where $A$ = adjacency matrix, $D$ = degree matrix, $R$ = random projection, $r$ = normalization strength
+where $S = D^{-1/2}A_{smart}D^{-1/2}$, $A_{smart}$ uses IRF×PMI edge weights
+
+**Smart Weight Formula:**
+$$W_{edge} = IRF(keywords) \times PMI(e_1, e_2, keywords)$$
+
+- **IRF**: $\log(1 + \frac{N}{1 + freq(kw)})$ - identifies rare vs common keywords
+- **PMI**: $\log(\frac{P(e_1,e_2|kw)}{P(e_1|kw) \cdot P(e_2|kw)})$ - measures semantic association strength
 
 ### 🧠 **Adaptive Entity Type Discovery**
 
@@ -56,14 +62,14 @@ where $A$ = adjacency matrix, $D$ = degree matrix, $R$ = random projection, $r$ 
 
 ### ⚡ **Agentic Entity Canonicalization**
 
-* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision, especially when FastRP/PPR compute embeddings before entity merging.
-* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion** to ensure FastRP/PPR operate on cleaned entity graphs.
+* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision, especially when Adaptive FastRP/PPR compute embeddings before entity merging.
+* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion** to ensure Adaptive FastRP/PPR operate on cleaned entity graphs.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Enhanced Workflow:**
 1. **Document Processing**: Extract entities and relations from input documents
 2. **Entity Merging**: Automatically merge duplicate entities (if enabled)
-3. **FastRP/PPR Computation**: Compute embeddings on clean entity graph after merging
+3. **Adaptive FastRP/PPR Computation**: Compute embeddings on clean entity graph after merging
 
 **Mathematical Framework:**
 
@@ -131,7 +137,7 @@ async def main():
             max_hop=2,              # Multi-hop traversal depth
             top_neighbors=30,       # Max neighbor per node
             top_ppr_nodes=5,        # Top PageRank entities
-            top_fastrp_nodes=5      # Top FastRP structural entities
+            top_fastrp_nodes=5      # Top Adaptive FastRP structural entities
         )
     )
 
@@ -155,7 +161,7 @@ response = rag.query(query, param=QueryParam(
     max_hop=2,           # Multi-hop traversal
     top_neighbors=30,    # Top neighbor per node
     top_ppr_nodes=5,     # Personalized PageRank entities
-    top_fastrp_nodes=5   # FastRP structural entities
+    top_fastrp_nodes=5   # Adaptive FastRP structural entities
 ))
 ```
 
@@ -166,7 +172,7 @@ response = rag.query(query, param=QueryParam(
 KairosRAG extends **LightRAG** with:
 
 1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
-2. **Three-Perspective Expansion** – Multi-hop traversal, Personalized PageRank, and FastRP structural similarity providing complementary retrieval perspectives.
+2. **Three-Perspective Expansion** – Multi-hop traversal, Personalized PageRank, and Adaptive FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 5. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.

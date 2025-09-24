@@ -20,7 +20,7 @@ class NodeEmbeddingConfig:
     # FastRP parameters
     embedding_dimension: int = 128
     normalization_strength: float = -0.1
-    iteration_weights: List[float] = field(default_factory=lambda: [1.0, 1.0])
+    iteration_weights: List[float] = field(default_factory=lambda: [1.0, 1.0, 0.5, 0.25])
     random_seed: Optional[int] = 42
     
     # Personalized PageRank parameters  
@@ -117,8 +117,8 @@ class NodeEmbeddingEnhancer:
             tgt = str(relation.get('tgt_id', ''))
             
             if src and tgt and src in graph.nodes() and tgt in graph.nodes():
-                # Add edge weight based on relation strength (optional)
-                weight = 1.0  # Can be enhanced with relation confidence scores
+                # Use smart_weight if available, otherwise default to 1.0
+                weight = relation.get('smart_weight', 1.0)
                 graph.add_edge(src, tgt, weight=weight)
                 
         logger.info(f"Built graph with {len(graph.nodes())} nodes, {len(graph.edges())} edges")
@@ -141,8 +141,8 @@ class NodeEmbeddingEnhancer:
             n_nodes = len(node_list)
             embedding_dim = self.config.embedding_dimension
             
-            # Create adjacency matrix with self-loops
-            A = nx.adjacency_matrix(self.graph, nodelist=node_list).astype(np.float32)
+            # Create adjacency matrix with smart weights and self-loops
+            A = nx.adjacency_matrix(self.graph, nodelist=node_list, weight="weight").astype(np.float32)
             A = A + sparse.eye(A.shape[0], dtype=np.float32)  # Add self-loops
             
             # Degree normalization
@@ -155,34 +155,25 @@ class NodeEmbeddingEnhancer:
             
             # Degree-based normalization strength r
             r = self.config.normalization_strength  # e.g., -0.1
-            D_r = sparse.diags(deg ** r)
-            
+
             # Initialize random projection matrix R (n x d)
             R = np.random.choice([-1.0, 1.0], size=(n_nodes, embedding_dim)).astype(np.float32)
             # Row normalize R
             R_norms = np.linalg.norm(R, axis=1, keepdims=True)
             R_norms = np.where(R_norms > 1e-9, R_norms, 1e-9)
             R = R / R_norms
-            
-            # FastRP multi-order aggregation
+
+            # FastRP multi-order aggregation: X = Σ(k=0 to K) w_k * D^r * S^k * R
             X = np.zeros((n_nodes, embedding_dim), dtype=np.float32)
             Z = R.copy()
-            
+
             for k, weight in enumerate(self.config.iteration_weights):
-                # Apply degree normalization: D^r Z D^r
-                if sparse.issparse(D_r):
-                    term = D_r @ Z
-                    # Convert to dense for element-wise multiplication
-                    if sparse.issparse(term):
-                        term = term.toarray()
-                    # Apply second D^r normalization
-                    term = (deg ** r)[:, np.newaxis] * term
-                else:
-                    term = (deg ** r)[:, np.newaxis] * Z * (deg ** r)[:, np.newaxis]
-                
+                # Apply single-sided degree normalization: D^r * Z
+                term = (deg ** r)[:, np.newaxis] * Z
+
                 # Accumulate weighted term
                 X += weight * term
-                
+
                 # Propagate for next iteration: Z = S @ Z
                 if k < len(self.config.iteration_weights) - 1:  # Don't compute for last iteration
                     Z = S @ Z

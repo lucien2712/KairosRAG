@@ -2861,6 +2861,31 @@ def _calculate_relevance_scores_vectorized(
     return final_scores.tolist()
 
 
+async def _precompute_adaptive_fastrp_weights(knowledge_graph_inst):
+    """Precompute Adaptive FastRP weights if not already computed."""
+    try:
+        from ..gnn.keywords_smart_weights import AdaptiveFastRPCalculator
+
+        # Check if weights already computed by sampling a few edges
+        sample_edges = await knowledge_graph_inst.get_edges_by_limit(limit=3)
+        if sample_edges:
+            # Check if smart_weight exists in any edge
+            for src, tgt in sample_edges:
+                edge_data = await knowledge_graph_inst.get_edge(src, tgt)
+                if edge_data and 'smart_weight' in edge_data:
+                    logger.debug("Adaptive FastRP weights already computed, skipping...")
+                    return
+
+        # Weights not found, compute them
+        logger.info("Computing Adaptive FastRP weights for all edges...")
+        calculator = AdaptiveFastRPCalculator()
+        await calculator.precompute_weights(knowledge_graph_inst)
+        logger.info("Adaptive FastRP weights computation completed")
+
+    except Exception as e:
+        logger.error(f"Failed to precompute Adaptive FastRP weights: {e}")
+
+
 def _allocate_expansion_resources(total_neighbors: int, top_fastrp_nodes: int) -> tuple[int, int]:
     """Allocate neighbor budget between semantic expansion and structural analysis."""
     
@@ -2922,10 +2947,14 @@ async def _semantic_expansion_plus_structural_analysis(
     relationships_vdb: BaseVectorStorage,
     global_config: dict[str, str],
 ) -> tuple[list[dict], list[dict]]:
-    """Three-way parallel expansion: Multi-hop + PPR + FastRP with independent pools."""
-    
-    logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + fastrp({query_param.top_fastrp_nodes})")
-    
+    """Three-way parallel expansion: Multi-hop + PPR + Adaptive FastRP with independent pools."""
+
+    logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + adaptive_fastrp({query_param.top_fastrp_nodes})")
+
+    # Precompute Adaptive FastRP weights if needed
+    if query_param.top_fastrp_nodes > 0:
+        await _precompute_adaptive_fastrp_weights(knowledge_graph_inst)
+
     # Create params for multi-hop expansion (keeps original top_neighbors)
     multihop_param = QueryParam(
         max_hop=query_param.max_hop,
@@ -3080,19 +3109,19 @@ async def _independent_fastrp_analysis(
             return []
         
         # Calculate FastRP similarity for all candidates
-        fastrp_candidates = []
+        smart_candidates = []
         for entity_name in candidate_entities:
             try:
-                fastrp_similarity = _compute_fastrp_similarity(
-                    entity_name, seed_entity_names, node_embedding
+                adaptive_fastrp_similarity = _compute_adaptive_fastrp_similarity(
+                    entity_name, seed_entity_names, knowledge_graph_inst
                 )
                 
                 # Get entity details from knowledge graph
                 entity_data = await knowledge_graph_inst.get_node(entity_name)
                 if entity_data:
-                    fastrp_candidates.append({
+                    smart_candidates.append({
                         "entity_name": entity_name,
-                        "fastrp_similarity": fastrp_similarity,
+                        "adaptive_fastrp_similarity": adaptive_fastrp_similarity,
                         "discovery_method": "fastrp_analysis",
                         "rank": entity_data.get("degree", 0),
                         **entity_data
@@ -3101,211 +3130,33 @@ async def _independent_fastrp_analysis(
             except Exception as e:
                 logger.debug(f"Error processing FastRP candidate {entity_name}: {e}")
         
-        if not fastrp_candidates:
+        if not smart_candidates:
             logger.warning("No valid FastRP candidates found")
             return []
         
         # Sort by FastRP similarity and select top N
-        fastrp_candidates.sort(key=lambda x: x["fastrp_similarity"], reverse=True)
-        top_fastrp_entities = fastrp_candidates[:query_param.top_fastrp_nodes]
-        
-        logger.info(f"FastRP selected top {len(top_fastrp_entities)} entities from {len(fastrp_candidates)} candidates")
-        logger.info(f"FastRP analysis completed: avg similarity: {sum(e['fastrp_similarity'] for e in top_fastrp_entities) / len(top_fastrp_entities) if top_fastrp_entities else 0:.4f}")
-        
-        return top_fastrp_entities
+        smart_candidates.sort(key=lambda x: x["adaptive_fastrp_similarity"], reverse=True)
+        top_smart_entities = smart_candidates[:query_param.top_fastrp_nodes]
+
+        logger.info(f"Adaptive FastRP selected top {len(top_smart_entities)} entities from {len(smart_candidates)} candidates")
+        logger.info(f"Adaptive FastRP analysis completed: avg similarity: {sum(e['adaptive_fastrp_similarity'] for e in top_smart_entities) / len(top_smart_entities) if top_smart_entities else 0:.4f}")
+
+        return top_smart_entities
         
     except Exception as e:
         logger.error(f"FastRP analysis failed: {e}")
         return []
 
 
-async def _global_structural_analysis(
-    seed_nodes: list[dict],
-    ll_keywords: str,
-    hl_keywords: str,
-    query_param: QueryParam,
-    knowledge_graph_inst: BaseGraphStorage,
-    entities_vdb: BaseVectorStorage,
-    relationships_vdb: BaseVectorStorage,
-    global_config: dict[str, str],
-) -> tuple[list[dict], list[dict]]:
-    """Global structural analysis using PersonalizedPageRank + FastRP filtering to find structurally important entities."""
-    
-    if not global_config:
-        logger.error("global_config is None in structural analysis")
-        return [], []
-    
-    node_embedding = global_config.get("node_embedding")
-    if not node_embedding:
-        logger.error("node_embedding not found in global_config")
-        return [], []
-    
-    # Extract seed entity names
-    seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
-    
-    if not seed_entity_names:
-        logger.warning("No seed entities found for structural analysis")
-        return [], []
-        
-    logger.info(f"Global structural analysis from {len(seed_entity_names)} seed entities")
-    
+
+def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], graph) -> float:
+    """Compute Adaptive FastRP similarity using keywords-aware weights."""
     try:
-        # 1. Compute Personalized PageRank to find structurally important entities
-        ppr_scores = node_embedding.compute_personalized_pagerank(seed_entity_names)
-        
-        if not ppr_scores:
-            logger.warning("No PageRank scores computed, falling back to empty results")
-            return [], []
-        
-        # 2. Select top PageRank entities as candidates
-        all_entities = [
-            (entity_name, score) for entity_name, score in ppr_scores.items()
-            if entity_name not in seed_entity_names
-        ]
-        
-        if not all_entities:
-            logger.warning("No entities found for PageRank ranking")
-            return [], []
-            
-        # Sort by PageRank score and select top N candidates
-        all_entities.sort(key=lambda x: x[1], reverse=True)
-        candidate_entities = [entity_name for entity_name, _ in all_entities[:query_param.top_ppr_nodes]]
-        
-        logger.info(f"Selected top {len(candidate_entities)} PageRank candidates from {len(all_entities)} total entities")
-        
-        # 3. Apply FastRP similarity filtering (structural relatedness to seed entities)
-        structural_candidates = []
-        
-        for entity_name in candidate_entities:
-            try:
-                # Calculate FastRP structural similarity to seed entities
-                fastrp_similarity = _compute_fastrp_similarity(
-                    entity_name, seed_entity_names, node_embedding
-                )
-                
-                # Get entity details from knowledge graph (no threshold filtering)
-                entity_data = await knowledge_graph_inst.get_node(entity_name)
-                if entity_data:
-                    structural_candidates.append({
-                        "entity_name": entity_name,
-                        "pagerank_score": ppr_scores[entity_name],
-                        "fastrp_similarity": fastrp_similarity,
-                        "discovery_method": "structural_analysis",
-                        "rank": entity_data.get("degree", 0),
-                        **entity_data
-                    })
-                        
-            except Exception as e:
-                logger.debug(f"Error processing candidate {entity_name}: {e}")
-                
-        # Sort by combined structural importance score (PageRank 60% + FastRP similarity 40%)
-        structural_candidates.sort(
-            key=lambda x: x["pagerank_score"] * 0.6 + x["fastrp_similarity"] * 0.4,
-            reverse=True
-        )
-        
-        # Select top N FastRP nodes
-        final_entities = structural_candidates[:query_param.top_fastrp_nodes]
-        
-        logger.info(f"Selected top {len(final_entities)} FastRP entities from {len(structural_candidates)} candidates")
-        
-        # 4. Find relations that connect structurally important entities
-        final_relations = await _find_structural_relations(
-            final_entities, seed_entity_names, relationships_vdb, query_param
-        )
-        
-        logger.info(f"Structural analysis found {len(final_entities)} entities with avg PageRank: {sum(e['pagerank_score'] for e in final_entities) / len(final_entities) if final_entities else 0:.4f}")
-        
-        return final_entities, final_relations
-        
+        from ..gnn.keywords_smart_weights import compute_adaptive_fastrp_similarity
+        return compute_adaptive_fastrp_similarity(target_entity, seed_entities, graph)
     except Exception as e:
-        logger.error(f"Global structural analysis failed: {e}")
-        return [], []
-
-
-async def _find_structural_relations(
-    selected_entities: list[dict],
-    seed_entity_names: list[str], 
-    relationships_vdb: BaseVectorStorage,
-    query_param: QueryParam
-) -> list[dict]:
-    """Find relations that connect structurally important entities."""
-    if not selected_entities:
-        return []
-    
-    try:
-        # Get all entity names (selected + seeds)
-        all_entity_names = seed_entity_names + [e["entity_name"] for e in selected_entities]
-        
-        # Find relations between these entities
-        structural_relations = []
-        
-        for entity_name in all_entity_names:
-            # Search for relations involving this entity
-            try:
-                # Search relations where this entity is source or target
-                relation_results = await relationships_vdb.query(entity_name, top_k=20)
-                
-                for relation_data in relation_results:
-                    src_id = relation_data.get("src_id", "")
-                    tgt_id = relation_data.get("tgt_id", "")
-                    
-                    # Keep relations that connect our selected entities
-                    if (src_id in all_entity_names and tgt_id in all_entity_names):
-                        relation_info = {
-                            "src_id": src_id,
-                            "tgt_id": tgt_id,
-                            "description": relation_data.get("description", ""),
-                            "keywords": relation_data.get("keywords", ""),
-                            "discovery_method": "structural_analysis",  # More descriptive
-                            "rank": relation_data.get("rank", 0),
-                            **relation_data
-                        }
-                        
-                        # Avoid duplicates
-                        if not any(
-                            r["src_id"] == src_id and r["tgt_id"] == tgt_id 
-                            for r in structural_relations
-                        ):
-                            structural_relations.append(relation_info)
-                            
-            except Exception as e:
-                logger.debug(f"Error finding relations for {entity_name}: {e}")
-        
-        logger.info(f"Found {len(structural_relations)} structural relations")
-        return structural_relations[:query_param.top_neighbors]  # Limit results
-        
-    except Exception as e:
-        logger.error(f"Error finding structural relations: {e}")
-        return []
-
-
-def _compute_fastrp_similarity(target_entity: str, seed_entities: list[str], node_embedding) -> float:
-    """Compute FastRP similarity between target entity and seed entities."""
-    try:
-        if not hasattr(node_embedding, 'fastrp_embeddings') or not node_embedding.fastrp_embeddings:
-            return 0.0
-            
-        target_embedding = node_embedding.fastrp_embeddings.get(target_entity)
-        if target_embedding is None:
-            return 0.0
-            
-        similarities = []
-        for seed_entity in seed_entities:
-            seed_embedding = node_embedding.fastrp_embeddings.get(seed_entity)
-            if seed_embedding is not None:
-                # Compute cosine similarity
-                import numpy as np
-                target_vec = np.array(target_embedding)
-                seed_vec = np.array(seed_embedding)
-                
-                # Normalize vectors
-                target_norm = np.linalg.norm(target_vec)
-                seed_norm = np.linalg.norm(seed_vec)
-                
-                if target_norm > 0 and seed_norm > 0:
-                    similarity = np.dot(target_vec, seed_vec) / (target_norm * seed_norm)
-                    similarities.append(similarity)
+        logger.error(f"Error computing keywords smart similarity: {e}")
+        return 0.0
                     
         # Return average similarity to all seed entities
         return sum(similarities) / len(similarities) if similarities else 0.0
