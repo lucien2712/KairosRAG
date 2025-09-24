@@ -751,7 +751,7 @@ async def amerge_entities(
                 existing_target_entity_data = (
                     await chunk_entity_relation_graph.get_node(target_entity)
                 )
-                logger.info(
+                logger.debug(
                     f"Target entity '{target_entity}' already exists, will merge data"
                 )
 
@@ -825,7 +825,7 @@ async def amerge_entities(
                         },
                     )
                     relation_updates[relation_key]["data"] = merged_relation
-                    logger.info(
+                    logger.debug(
                         f"Merged duplicate relationship: {new_src} -> {new_tgt}"
                     )
                 else:
@@ -840,7 +840,7 @@ async def amerge_entities(
                 await chunk_entity_relation_graph.upsert_edge(
                     rel_data["src"], rel_data["tgt"], rel_data["data"]
                 )
-                logger.info(
+                logger.debug(
                     f"Created or updated relationship: {rel_data['src']} -> {rel_data['tgt']}"
                 )
 
