@@ -468,6 +468,8 @@ async def _handle_single_entity_extraction(
                 f"Entity extraction failed in {chunk_key}: expecting 4 fields but got {len(record_attributes)}"
             )
             logger.warning(f"Entity extracted: {record_attributes[1]}")
+            # Return the malformed record for potential retry
+            return "MALFORMED_ENTITY"
         return None
 
     try:
@@ -543,6 +545,8 @@ async def _handle_single_relationship_extraction(
                 f"Relation extraction failed in {chunk_key}: expecting 5 fields but got {len(record_attributes)}"
             )
             logger.warning(f"Relation extracted: {record_attributes[1]}")
+            # Return the malformed record for potential retry
+            return "MALFORMED_RELATIONSHIP"
         return None
 
     try:
@@ -953,6 +957,93 @@ async def _get_cached_extraction_results(
     return sorted_cached_results
 
 
+async def _retry_malformed_extraction(
+    original_content: str,
+    chunk_key: str,
+    file_path: str,
+    timestamp: str,
+    malformed_records: list[str],
+    use_llm_func: callable,
+    context_base: dict,
+    llm_response_cache=None,
+    max_retries: int = 2,
+) -> tuple[dict, dict]:
+    """Retry extraction for malformed records using complete prompt.
+
+    Args:
+        original_content: The original chunk content
+        chunk_key: The chunk key for logging
+        file_path: File path for source attribution
+        timestamp: Timestamp for source attribution
+        malformed_records: List of malformed record strings
+        use_llm_func: LLM function to use
+        context_base: Context for prompt formatting
+        llm_response_cache: Cache for LLM responses
+        max_retries: Maximum number of retry attempts
+
+    Returns:
+        tuple: (nodes_dict, edges_dict) containing successfully extracted entities and relationships
+    """
+    from lightrag.prompt import PROMPTS
+
+    retry_nodes = defaultdict(list)
+    retry_edges = defaultdict(list)
+
+    if not malformed_records:
+        return dict(retry_nodes), dict(retry_edges)
+
+    # Format the complete entity extraction prompt for retry
+    entity_extract_prompt = PROMPTS["entity_extraction"]
+
+    retry_prompt_text = entity_extract_prompt.format(
+        **{**context_base, "input_text": original_content, "timestamp": timestamp}
+    ) + f"\n\nRETRY CONTEXT:\nYour previous extraction contained malformed records: {malformed_records}\nPlease re-extract ALL entities and relationships from the text above, ensuring correct format."
+
+    for attempt in range(max_retries):
+        try:
+            # Retry attempt in progress
+
+            # Use LLM function with cache
+            retry_result = await use_llm_func_with_cache(
+                retry_prompt_text,
+                use_llm_func,
+                llm_response_cache=llm_response_cache,
+                cache_type="extract_retry",
+                chunk_id=f"{chunk_key}_retry_{attempt}",
+            )
+
+            # Process the retry result
+            retry_nodes_attempt, retry_edges_attempt = await _process_extraction_result(
+                retry_result,
+                f"{chunk_key}_retry_{attempt}",
+                file_path,
+                timestamp,
+                tuple_delimiter=context_base["tuple_delimiter"],
+                record_delimiter=context_base["record_delimiter"],
+                completion_delimiter=context_base["completion_delimiter"],
+                is_retry=True,  # Flag to prevent infinite retry loops
+            )
+
+            # If we got successful results, merge them
+            if retry_nodes_attempt or retry_edges_attempt:
+                for entity_name, entities in retry_nodes_attempt.items():
+                    if entity_name == "__MALFORMED_RECORDS__":
+                        continue  # Skip special malformed records key
+                    retry_nodes[entity_name].extend(entities)
+                for edge_key, edges in retry_edges_attempt.items():
+                    retry_edges[edge_key].extend(edges)
+
+                logger.info(f"Retry successful: recovered {len(retry_nodes_attempt)} entities + {len(retry_edges_attempt)} relationships")
+                break
+
+        except Exception as e:
+            logger.warning(f"Retry attempt {attempt + 1} failed for {chunk_key}: {e}")
+            if attempt == max_retries - 1:
+                logger.error(f"All retry attempts failed for {chunk_key}")
+
+    return dict(retry_nodes), dict(retry_edges)
+
+
 async def _process_extraction_result(
     result: str,
     chunk_key: str,
@@ -961,6 +1052,7 @@ async def _process_extraction_result(
     tuple_delimiter: str = "<|>",
     record_delimiter: str = "##",
     completion_delimiter: str = "<|COMPLETE|>",
+    is_retry: bool = False,
 ) -> tuple[dict, dict]:
     """Process a single extraction result (either initial or gleaning)
     Args:
@@ -975,6 +1067,7 @@ async def _process_extraction_result(
     """
     maybe_nodes = defaultdict(list)
     maybe_edges = defaultdict(list)
+    malformed_records = []  # Collect malformed records for retry
 
     # Standardize Chinese brackets around record_delimiter to English brackets
     bracket_pattern = f"[）)](\\s*{re.escape(record_delimiter)}\\s*)[（(]"
@@ -1019,7 +1112,11 @@ async def _process_extraction_result(
         entity_data = await _handle_single_entity_extraction(
             record_attributes, chunk_key, file_path, timestamp
         )
-        if entity_data is not None:
+        if entity_data == "MALFORMED_ENTITY":
+            # Silently collect malformed entity record for retry
+            malformed_records.append(record)
+            continue
+        elif entity_data is not None:
             maybe_nodes[entity_data["entity_name"]].append(entity_data)
             continue
 
@@ -1027,10 +1124,19 @@ async def _process_extraction_result(
         relationship_data = await _handle_single_relationship_extraction(
             record_attributes, chunk_key, file_path, timestamp
         )
-        if relationship_data is not None:
+        if relationship_data == "MALFORMED_RELATIONSHIP":
+            # Silently collect malformed relationship record for retry
+            malformed_records.append(record)
+            continue
+        elif relationship_data is not None:
             maybe_edges[
                 (relationship_data["src_id"], relationship_data["tgt_id"])
             ].append(relationship_data)
+
+    # If we have malformed records and this is not already a retry, store them for retry
+    if malformed_records and not is_retry:
+        # Store malformed records in a way that can be accessed for retry
+        maybe_nodes["__MALFORMED_RECORDS__"] = malformed_records
 
     return dict(maybe_nodes), dict(maybe_edges)
 
@@ -1360,25 +1466,32 @@ async def _merge_nodes_then_upsert(
         already_file_paths.extend(already_node["file_path"].split(GRAPH_FIELD_SEP))
         already_description.extend(already_node["description"].split(GRAPH_FIELD_SEP))
 
-    entity_type = sorted(
-        Counter(
-            [dp["entity_type"] for dp in nodes_data] + already_entity_types
-        ).items(),
-        key=lambda x: x[1],
-        reverse=True,
-    )[0][0]  # Get the entity type with the highest count
+    # Filter out invalid data and extract entity types safely
+    valid_nodes_data = [dp for dp in nodes_data if isinstance(dp, dict) and "entity_type" in dp]
 
-    # merge and deduplicate description
+    if not valid_nodes_data and not already_entity_types:
+        logger.warning(f"No valid entity type found for {entity_name}, using 'unknown'")
+        entity_type = "unknown"
+    else:
+        entity_type = sorted(
+            Counter(
+                [dp["entity_type"] for dp in valid_nodes_data] + already_entity_types
+            ).items(),
+            key=lambda x: x[1],
+            reverse=True,
+        )[0][0]  # Get the entity type with the highest count
+
+    # merge and deduplicate description using valid nodes data
     description_list = list(
         dict.fromkeys(
             already_description
-            + [dp["description"] for dp in nodes_data if dp.get("description")]
+            + [dp["description"] for dp in valid_nodes_data if dp.get("description")]
         )
     )
 
     num_fragment = len(description_list)
     already_fragment = len(already_description)
-    deduplicated_num = already_fragment + len(nodes_data) - num_fragment
+    deduplicated_num = already_fragment + len(valid_nodes_data) - num_fragment
     if deduplicated_num > 0:
         dd_message = f"(dd:{deduplicated_num})"
     else:
@@ -1410,9 +1523,9 @@ async def _merge_nodes_then_upsert(
         description = "(no description)"
 
     source_id = GRAPH_FIELD_SEP.join(
-        set([dp["source_id"] for dp in nodes_data] + already_source_ids)
+        set([dp["source_id"] for dp in valid_nodes_data] + already_source_ids)
     )
-    file_path = build_file_path(already_file_paths, nodes_data, entity_name)
+    file_path = build_file_path(already_file_paths, valid_nodes_data, entity_name)
 
     node_data = dict(
         entity_id=entity_name,
@@ -1936,6 +2049,7 @@ async def extract_entities(
 ) -> list:
     use_llm_func: callable = global_config["llm_model_func"]
     entity_extract_max_gleaning = global_config["entity_extract_max_gleaning"]
+    entity_extract_max_retries = global_config.get("entity_extract_max_retries", 2)
 
     ordered_chunks = list(chunks.items())
     # add language and example number params to prompt
@@ -2019,6 +2133,35 @@ async def extract_entities(
             completion_delimiter=context_base["completion_delimiter"],
         )
 
+        # Check for malformed records and retry if needed
+        malformed_records = maybe_nodes.pop("__MALFORMED_RECORDS__", [])
+        if malformed_records:
+            logger.info(f"Retrying {len(malformed_records)} malformed records in {chunk_key}")
+            retry_nodes, retry_edges = await _retry_malformed_extraction(
+                content,  # original chunk content
+                chunk_key,
+                file_path,
+                timestamp,
+                malformed_records,
+                use_llm_func,
+                context_base,
+                llm_response_cache=llm_response_cache,
+                max_retries=entity_extract_max_retries,
+            )
+
+            # Merge retry results with initial results (exclude special keys)
+            for entity_name, entities in retry_nodes.items():
+                if entity_name == "__MALFORMED_RECORDS__":
+                    continue  # Skip special malformed records key
+                if entity_name not in maybe_nodes:
+                    maybe_nodes[entity_name] = []
+                maybe_nodes[entity_name].extend(entities)
+
+            for edge_key, edges in retry_edges.items():
+                if edge_key not in maybe_edges:
+                    maybe_edges[edge_key] = []
+                maybe_edges[edge_key].extend(edges)
+
         # Process additional gleaning results
         if entity_extract_max_gleaning > 0:
             glean_result = await use_llm_func_with_cache(
@@ -2042,6 +2185,7 @@ async def extract_entities(
                 tuple_delimiter=context_base["tuple_delimiter"],
                 record_delimiter=context_base["record_delimiter"],
                 completion_delimiter=context_base["completion_delimiter"],
+                is_retry=True,  # Prevent malformed records check in gleaning stage
             )
 
             # Merge results - only add entities and edges with new names

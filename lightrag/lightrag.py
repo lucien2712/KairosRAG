@@ -198,6 +198,11 @@ class LightRAG:
     )
     """Maximum number of entity extraction attempts for ambiguous content."""
 
+    entity_extract_max_retries: int = field(
+        default=get_env_value("ENTITY_EXTRACT_MAX_RETRIES", 2, int)
+    )
+    """Maximum number of retry attempts for malformed entity extraction records."""
+
     force_llm_summary_on_merge: int = field(
         default=get_env_value(
             "FORCE_LLM_SUMMARY_ON_MERGE", DEFAULT_FORCE_LLM_SUMMARY_ON_MERGE, int
