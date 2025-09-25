@@ -67,11 +67,6 @@ The Adaptive FastRP algorithm uses edge weights from the original Graph knowledg
 * **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion** to ensure Adaptive FastRP/PPR operate on cleaned entity graphs.
 * *Currently implemented for the NanoVectorDB backend.*
 
-**Enhanced Workflow:**
-1. **Document Processing**: Extract entities and relations from input documents
-2. **Entity Merging**: Automatically merge duplicate entities (if enabled)
-3. **Adaptive FastRP/PPR Computation**: Compute embeddings on clean entity graph after merging
-
 **Mathematical Framework:**
 
 **Vector Similarity Pre-filtering:**
