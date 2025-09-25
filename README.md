@@ -19,7 +19,7 @@ where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatena
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with edge weights.
+* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with edge weights.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Architecture Overview:**
@@ -27,7 +27,7 @@ where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatena
 The system processes each query through three independent perspectives and merges results:
 
 1. **Multi-hop Semantic Expansion**: Traditional graph traversal based on query-entity similarity
-2. **Global Importance Analysis**: PageRank-based ranking of entities relative to seed nodes  
+2. **Query-aware Global Importance Analysis**: Enhanced PageRank with query-sensitive seed weighting and edge reweighting  
 3. **Adaptive Structural Analysis**: Enhanced FastRP with edge weights for structure-aware embeddings
 
 **Mathematical Framework:**
@@ -39,10 +39,14 @@ $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{rel
 
 where $\delta = 0.8$ (distance decay), $h$ = hop count
 
-**Personalized PageRank:**
-$$PPR(v; S) = (1-d) \cdot p_S(v) + d \cdot \sum_{u \to v} \frac{PPR(u; S)}{|out(u)|}$$
+**Query-aware Personalized PageRank:**
+$$PPR_{query}(v; S, W, E) = (1-d) \cdot p_{S,W}(v) + d \cdot \sum_{u \to v} \frac{PPR_{query}(u; S, W, E) \cdot e_{reweight}(u,v)}{|out(u)|}$$
 
-where $S$ = seed entities, $d = 0.85$ (damping factor)
+where:
+- $S$ = seed entities, $W$ = query-aware seed weights (Phase 1)
+- $E$ = query-aware edge weights (Phase 2), $d = 0.85$ (damping factor)
+- $p_{S,W}(v)$ = personalization vector with weighted seeds
+- $e_{reweight}(u,v)$ = temporarily adjusted edge weights based on query-relation similarity
 
 **Adaptive FastRP with Edge Weights:**
 $$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
@@ -169,7 +173,7 @@ response = rag.query(query, param=QueryParam(
 KairosRAG extends **LightRAG** with:
 
 1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
-2. **Three-Perspective Expansion** – Multi-hop traversal, Personalized PageRank, and Adaptive FastRP structural similarity providing complementary retrieval perspectives.
+2. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Adaptive FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 5. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.

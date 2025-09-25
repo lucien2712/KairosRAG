@@ -140,8 +140,8 @@ class NodeEmbeddingEnhancer:
             node_list = list(self.graph.nodes())
             n_nodes = len(node_list)
             embedding_dim = self.config.embedding_dimension
-            
-            # Create adjacency matrix with smart weights and self-loops
+
+            # Create adjacency matrix with edges and self-loops
             A = nx.adjacency_matrix(self.graph, nodelist=node_list, weight="weight").astype(np.float32)
             A = A + sparse.eye(A.shape[0], dtype=np.float32)  # Add self-loops
             
@@ -218,13 +218,24 @@ class NodeEmbeddingEnhancer:
             num_nodes = len(self.graph.nodes())
             return {node: 1.0/num_nodes for node in self.graph.nodes()}
             
-    def compute_personalized_pagerank(self, seed_entities: List[str]) -> Dict[str, float]:
+    def compute_personalized_pagerank(
+        self,
+        seed_entities: List[str],
+        entity_similarities: Dict[str, float] = None,
+        relation_similarities: Dict[str, float] = None,
+        tau: float = 0.1,
+        alpha: float = 0.3
+    ) -> Dict[str, float]:
         """
-        Compute personalized PageRank scores for query-time reasoning.
-        
+        Compute personalized PageRank scores for query-time reasoning with simplified edge reweighting.
+
         Args:
             seed_entities: List of entity IDs to use as personalization seeds
-            
+            entity_similarities: Optional dict mapping entity_id -> similarity_score for query-aware seed weighting (Phase 1)
+            relation_similarities: Optional dict mapping relation_keywords -> similarity_score for direct edge reweighting (Phase 2)
+            tau: Temperature parameter for softmax weighting (lower = more focused)
+            alpha: Not used in simplified implementation (kept for compatibility)
+
         Returns:
             Dict mapping entity_id -> personalized_pagerank_score
         """
@@ -235,27 +246,67 @@ class NodeEmbeddingEnhancer:
             # Create personalization vector
             personalization = {}
             valid_seeds = [e for e in seed_entities if e in self.graph.nodes()]
-            
+
             if not valid_seeds:
                 logger.warning("No valid seed entities found in graph")
                 return {}
-                
+
+            # Compute query-aware seed weights if similarity scores provided
+            if entity_similarities:
+                seed_weights = self._compute_query_aware_weights(valid_seeds, entity_similarities, tau)
+                logger.debug(f"Query-aware seed weights computed: {len(seed_weights)} weighted seeds")
+            else:
+                # Fallback to uniform weights
+                seed_weights = {seed: 1.0/len(valid_seeds) for seed in valid_seeds}
+                logger.debug(f"Using uniform seed weights for {len(valid_seeds)} seeds")
+
+            # Build personalization vector for all nodes
             for node in self.graph.nodes():
-                personalization[node] = 1.0 if node in valid_seeds else 0.0
-                
-            # Normalize personalization vector
+                personalization[node] = seed_weights.get(node, 0.0)
+
+            # Ensure normalization (should already be normalized, but double-check)
             total = sum(personalization.values())
             if total > 0:
                 personalization = {k: v/total for k, v in personalization.items()}
-            
-            # Compute personalized PageRank
-            ppr_scores = nx.pagerank(
-                self.graph,
-                alpha=self.config.pagerank_alpha,
-                personalization=personalization,
-                max_iter=self.config.pagerank_max_iter,
-                tol=self.config.pagerank_tol
-            )
+
+            # Phase 2: Apply direct edge reweighting if relation similarities provided
+            if relation_similarities and alpha > 0.0:
+                # Temporarily set edge weights based on hl_keywords similarity
+                for u, v, edge_data in self.graph.edges(data=True):
+                    edge_keywords = edge_data.get('keywords', '')
+                    if edge_keywords in relation_similarities:
+                        # Use similarity as weight directly
+                        similarity = relation_similarities[edge_keywords]
+                        self.graph[u][v]['temp_weight'] = max(0.1, similarity)  # Min weight 0.1
+                    else:
+                        self.graph[u][v]['temp_weight'] = 0.1  # Default low weight
+
+                # Compute PageRank with temporary weights
+                ppr_scores = nx.pagerank(
+                    self.graph,
+                    alpha=self.config.pagerank_alpha,
+                    personalization=personalization,
+                    max_iter=self.config.pagerank_max_iter,
+                    tol=self.config.pagerank_tol,
+                    weight='temp_weight'
+                )
+
+                # Clean up temporary weights
+                for u, v in self.graph.edges():
+                    if 'temp_weight' in self.graph[u][v]:
+                        del self.graph[u][v]['temp_weight']
+
+                logger.debug(f"Applied direct edge reweighting with {len(relation_similarities)} relation similarities")
+            else:
+                # Compute PageRank with original weights
+                ppr_scores = nx.pagerank(
+                    self.graph,
+                    alpha=self.config.pagerank_alpha,
+                    personalization=personalization,
+                    max_iter=self.config.pagerank_max_iter,
+                    tol=self.config.pagerank_tol,
+                    weight='weight'
+                )
             
             logger.info(f"Personalized PageRank computed for {len(ppr_scores)} nodes with {len(valid_seeds)} seeds")
             return ppr_scores
@@ -371,3 +422,53 @@ class NodeEmbeddingEnhancer:
             self.graph = None
             self.fastrp_embeddings = None
             self.pagerank_scores = None
+
+    def _compute_query_aware_weights(
+        self,
+        valid_seeds: List[str],
+        entity_similarities: Dict[str, float],
+        tau: float = 0.1
+    ) -> Dict[str, float]:
+        """
+        Compute query-aware seed weights using softmax on similarity scores.
+
+        Args:
+            valid_seeds: List of valid seed entities in the graph
+            entity_similarities: Dict mapping entity_id -> similarity_score
+            tau: Temperature parameter for softmax (lower = more focused)
+
+        Returns:
+            Dict mapping seed_entity -> normalized_weight
+        """
+        import numpy as np
+
+        # Extract similarity scores for valid seeds
+        scores = []
+        seeds_with_scores = []
+
+        for seed in valid_seeds:
+            if seed in entity_similarities:
+                scores.append(entity_similarities[seed])
+                seeds_with_scores.append(seed)
+            else:
+                # Fallback score for seeds without similarity data
+                scores.append(0.0)
+                seeds_with_scores.append(seed)
+
+        if not seeds_with_scores:
+            logger.warning("No seeds with similarity scores, falling back to uniform weights")
+            return {seed: 1.0/len(valid_seeds) for seed in valid_seeds}
+
+        # Apply softmax with temperature
+        scores = np.array(scores)
+        exp_scores = np.exp(scores / tau)
+        weights = exp_scores / np.sum(exp_scores)
+
+        # Create weight dictionary
+        seed_weights = {seed: float(weight) for seed, weight in zip(seeds_with_scores, weights)}
+
+        logger.debug(f"Query-aware weights: max={max(weights):.3f}, min={min(weights):.3f}, "
+                    f"std={np.std(weights):.3f}")
+
+        return seed_weights
+

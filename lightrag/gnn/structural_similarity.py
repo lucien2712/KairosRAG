@@ -8,9 +8,13 @@ from typing import List, Dict
 from ..utils import logger
 
 
-def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[str], node_embedding) -> float:
+def compute_adaptive_fastrp_similarity(
+    target_entity: str,
+    seed_entities: List[str],
+    node_embedding
+) -> float:
     """
-    True FastRP similarity calculation using precomputed 128-dimensional embeddings
+    Adaptive FastRP similarity calculation using precomputed 128-dimensional embeddings
     Computes cosine similarity between FastRP embedding vectors
 
     Args:
@@ -52,7 +56,6 @@ def compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: List[s
 
             logger.debug(f"FastRP similarity between '{target_entity}' and '{seed_entity}': {similarity:.4f}")
 
-        # Return average similarity across all seed entities
         result = float(np.mean(similarities)) if similarities else 0.0
         logger.debug(f"Average FastRP similarity for '{target_entity}': {result:.4f} (from {len(similarities)} seed entities)")
 

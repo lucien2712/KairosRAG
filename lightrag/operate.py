@@ -6,6 +6,7 @@ import json
 import re
 import os
 import json_repair
+import numpy as np
 from typing import Any, AsyncIterator
 from collections import Counter, defaultdict
 
@@ -28,6 +29,7 @@ from .utils import (
     remove_think_tags,
     pick_by_weighted_polling,
     pick_by_vector_similarity,
+    cosine_similarity,
     process_chunks_unified,
     build_file_path,
     find_table_boundaries,
@@ -2944,7 +2946,7 @@ async def _semantic_expansion_plus_structural_analysis(
     )
     
     ppr_task = _independent_ppr_analysis(
-        seed_nodes, query_param, knowledge_graph_inst, global_config
+        seed_nodes, query_param, knowledge_graph_inst, global_config, ll_keywords, hl_keywords
     )
     
     fastrp_task = _independent_fastrp_analysis(
@@ -2981,9 +2983,11 @@ async def _independent_ppr_analysis(
     seed_nodes: list[dict],
     query_param: QueryParam,
     knowledge_graph_inst: BaseGraphStorage,
-    global_config: dict[str, str]
+    global_config: dict[str, str],
+    ll_keywords: str = "",
+    hl_keywords: str = ""
 ) -> list[dict]:
-    """Independent PPR analysis - select top N entities by PageRank score."""
+    """Independent PPR analysis with Phase 1 + Phase 2 query-aware enhancements - select top N entities by PageRank score."""
     
     if query_param.top_ppr_nodes <= 0:
         return []
@@ -3003,8 +3007,79 @@ async def _independent_ppr_analysis(
         
         logger.info(f"PPR analysis from {len(seed_entity_names)} seed entities")
 
-        # Compute Personalized PageRank based on seed entities
-        ppr_scores = node_embedding.compute_personalized_pagerank(seed_entity_names)
+        # Compute query-aware seed weights if ll_keywords provided
+        entity_similarities = {}
+        if ll_keywords.strip():
+            try:
+                # Get entities vector database for similarity computation
+                entities_vdb = global_config.get("entities_vdb")
+                if entities_vdb and hasattr(entities_vdb, 'embedding_func'):
+                    # Compute query embedding
+                    embedding_func = entities_vdb.embedding_func
+                    if embedding_func and embedding_func.func:
+                        query_embedding = await embedding_func.func([ll_keywords])
+                        query_vec = np.array(query_embedding[0])
+
+                        # Compute similarity scores for seed entities
+                        for seed_entity in seed_entity_names:
+                            # Create entity string for embedding (matching multi-hop format)
+                            seed_info = next((node for node in seed_nodes if node.get("entity_name") == seed_entity), None)
+                            if seed_info and seed_info.get("entity_description"):
+                                entity_str = f"{seed_entity} {seed_info['entity_description']}"
+                                entity_embedding = await embedding_func.func([entity_str])
+                                entity_vec = np.array(entity_embedding[0])
+
+                                # Compute cosine similarity
+                                similarity = cosine_similarity(query_vec, entity_vec)
+                                entity_similarities[seed_entity] = similarity
+
+                        logger.debug(f"Computed query-aware similarities for {len(entity_similarities)} seed entities")
+
+            except Exception as e:
+                logger.warning(f"Could not compute query-aware similarities: {e}")
+
+        # Phase 2: Compute relation similarities for edge reweighting
+        relation_similarities = {}
+        if hl_keywords.strip():
+            try:
+                # Get relationships vector database for similarity computation
+                relationships_vdb = global_config.get("relationships_vdb")
+                if relationships_vdb and hasattr(relationships_vdb, 'embedding_func'):
+                    # Compute hl_keywords embedding
+                    embedding_func = relationships_vdb.embedding_func
+                    if embedding_func and embedding_func.func:
+                        hl_query_embedding = await embedding_func.func([hl_keywords])
+                        hl_query_vec = np.array(hl_query_embedding[0])
+
+                        # Get all relations from knowledge graph
+                        all_relations = await knowledge_graph_inst.get_all_relationships()
+
+                        # Compute similarity scores for all relations
+                        for relation in all_relations:
+                            rel_keywords = relation.get("keywords", "")
+                            if rel_keywords.strip():
+                                # Create relation string for embedding (matching multi-hop format)
+                                rel_str = f"{rel_keywords}\t{relation.get('source_id', '')}\n{relation.get('target_id', '')}\n{relation.get('description', '')}"
+                                rel_embedding = await embedding_func.func([rel_str])
+                                rel_vec = np.array(rel_embedding[0])
+
+                                # Compute cosine similarity
+                                similarity = cosine_similarity(hl_query_vec, rel_vec)
+                                relation_similarities[rel_keywords] = similarity
+
+                        logger.debug(f"Computed query-aware relation similarities for {len(relation_similarities)} relations")
+
+            except Exception as e:
+                logger.warning(f"Could not compute relation similarities: {e}")
+
+        # Compute Personalized PageRank with both Phase 1 and Phase 2 enhancements
+        ppr_scores = node_embedding.compute_personalized_pagerank(
+            seed_entity_names,
+            entity_similarities=entity_similarities if entity_similarities else None,
+            relation_similarities=relation_similarities if relation_similarities else None,
+            tau=0.1,      # Temperature for softmax weighting (Phase 1)
+            alpha=0.3     # Edge reweighting strength (Phase 2)
+        )
         if not ppr_scores:
             logger.warning("No Personalized PageRank scores computed")
             return []
