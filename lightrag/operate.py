@@ -2743,7 +2743,7 @@ async def _sort_combined_chunks(
         if chunk_id in chunk_id_to_chunk:
             sorted_chunks.append(chunk_id_to_chunk[chunk_id])
     
-    logger.info(f"Combined {chunk_type} chunks sorting completed: {len(sorted_chunks)} chunks in final order")
+    # logger.info(f"Combined {chunk_type} chunks sorting completed: {len(sorted_chunks)} chunks in final order")
     return sorted_chunks
 
 

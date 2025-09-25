@@ -43,8 +43,8 @@ where $\delta = 0.8$ (distance decay), $h$ = hop count
 $$PPR_{query}(v; S, W, E) = (1-d) \cdot p_{S,W}(v) + d \cdot \sum_{u \to v} \frac{PPR_{query}(u; S, W, E) \cdot e_{reweight}(u,v)}{|out(u)|}$$
 
 where:
-- $S$ = seed entities, $W$ = query-aware seed weights (Phase 1)
-- $E$ = query-aware edge weights (Phase 2), $d = 0.85$ (damping factor)
+- $S$ = seed entities, $W$ = query-aware seed weights 
+- $E$ = query-aware edge weights, $d = 0.85$ (damping factor)
 - $p_{S,W}(v)$ = personalization vector with weighted seeds
 - $e_{reweight}(u,v)$ = temporarily adjusted edge weights based on query-relation similarity
 
