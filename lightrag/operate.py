@@ -2723,7 +2723,6 @@ async def _process_all_chunks_unified(
         # Fallback to reasonable default
         target_chunks = max_related_chunks
 
-    logger.info(f"Dynamic unified chunk allocation: {total_entities} total entities/relations -> targeting {target_chunks} chunks")
 
     # Step 5: Apply selection algorithm on occurrence-sorted chunks
     selected_chunks = []
@@ -4989,7 +4988,7 @@ async def _find_most_related_edges_from_entities(
         if edge_props is not None:
             if "weight" not in edge_props:
                 logger.warning(
-                    f"Edge {pair} missing 'weight' attribute, using default value 1.0"
+                    "Edge %s missing 'weight' attribute, using default value 1.0", pair
                 )
                 edge_props["weight"] = 1.0
 
