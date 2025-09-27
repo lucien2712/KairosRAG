@@ -2659,6 +2659,7 @@ async def _sort_combined_chunks(
     chunks_vdb: BaseVectorStorage,
     query_param: QueryParam,
     query_embedding = None,
+    actual_entity_count: int = None,  # Number of entities/relations contributing to chunks
 ) -> list[dict]:
     """Sort combined chunks (initial + expanded) using the same logic as initial chunks."""
     
@@ -2698,7 +2699,23 @@ async def _sort_combined_chunks(
     total_chunks = len(mock_entities_with_chunks[0]["chunks"])
     
     if kg_chunk_pick_method == "VECTOR" and query and chunks_vdb:
-        num_of_chunks = int(max_related_chunks * len(mock_entities_with_chunks) / 2)
+        # Calculate chunk count based on actual entity/relation count
+        if actual_entity_count and actual_entity_count > 0:
+            # Each entity/relation can contribute up to max_related_chunks chunks
+            base_chunks = actual_entity_count * max_related_chunks
+
+            # Apply chunk_top_k as global limit, split between entity and relation chunks
+            # Assume roughly equal split if not specified
+            max_chunks_for_type = (query_param.chunk_top_k or 20) // 2
+
+            # Take minimum of calculated base and global limit
+            num_of_chunks = min(base_chunks, max_chunks_for_type)
+
+            # Ensure at least some chunks if entities/relations exist
+            num_of_chunks = max(1, num_of_chunks)
+        else:
+            # Fallback to more reasonable default than the broken formula
+            num_of_chunks = max_related_chunks
         
         # Get embedding function
         embedding_func_config = text_chunks_db.embedding_func
@@ -2722,6 +2739,7 @@ async def _sort_combined_chunks(
         if selected_chunk_ids == []:
             raise RuntimeError(f"No {chunk_type} chunks selected by vector similarity - this should not happen with valid data")
         
+        logger.info(f"Dynamic chunk allocation: {actual_entity_count or 'unknown'} {chunk_type}s -> targeting {num_of_chunks} chunks")
         logger.info(f"Selected {len(selected_chunk_ids)} from {total_chunks} combined {chunk_type} chunks by vector similarity")
     
     if kg_chunk_pick_method == "WEIGHT":
@@ -2745,6 +2763,142 @@ async def _sort_combined_chunks(
     
     # logger.info(f"Combined {chunk_type} chunks sorting completed: {len(sorted_chunks)} chunks in final order")
     return sorted_chunks
+
+
+async def _process_all_chunks_unified(
+    entity_chunks: list[dict],
+    relation_chunks: list[dict],
+    entities_context: list[dict],
+    relations_context: list[dict],
+    query: str,
+    text_chunks_db: BaseKVStorage,
+    chunks_vdb: BaseVectorStorage,
+    query_param: QueryParam,
+    query_embedding = None,
+) -> list[dict]:
+    """
+    Unified chunk processing: merge all chunks, deduplicate, sort by occurrence count,
+    then select by vector similarity.
+
+    This replaces the separated entity/relation chunk processing for true global optimization.
+    """
+    if not entity_chunks and not relation_chunks:
+        return []
+
+    # Get configuration
+    kg_chunk_pick_method = text_chunks_db.global_config.get(
+        "kg_chunk_pick_method", DEFAULT_KG_CHUNK_PICK_METHOD
+    )
+    max_related_chunks = text_chunks_db.global_config.get(
+        "related_chunk_number", DEFAULT_RELATED_CHUNK_NUMBER
+    )
+
+    # Step 1: Merge all chunks
+    all_chunks = entity_chunks + relation_chunks
+    logger.debug(f"Unified chunk processing: {len(entity_chunks)} entity + {len(relation_chunks)} relation = {len(all_chunks)} total chunks")
+
+    # Step 2: Deduplicate and calculate occurrence count
+    chunk_occurrence = {}
+    deduplicated_chunks = {}
+
+    for chunk in all_chunks:
+        chunk_id = chunk.get("chunk_id")
+        if chunk_id:
+            if chunk_id not in deduplicated_chunks:
+                deduplicated_chunks[chunk_id] = chunk
+                chunk_occurrence[chunk_id] = 1
+            else:
+                chunk_occurrence[chunk_id] += 1
+
+    # Step 3: Sort by occurrence count (most important first)
+    sorted_chunks = sorted(
+        deduplicated_chunks.values(),
+        key=lambda x: chunk_occurrence.get(x.get("chunk_id"), 0),
+        reverse=True
+    )
+
+    logger.debug(f"After deduplication: {len(sorted_chunks)} unique chunks, max occurrence: {max(chunk_occurrence.values()) if chunk_occurrence else 0}")
+
+    # Step 4: Calculate dynamic target chunk count (global total, not split)
+    total_entities = len(entities_context) + len(relations_context)
+    if total_entities > 0:
+        # Each entity/relation can contribute up to max_related_chunks chunks
+        base_chunks = total_entities * max_related_chunks
+
+        # Apply chunk_top_k as global limit (no split between entity/relation)
+        max_chunks_total = query_param.chunk_top_k or 20
+
+        # Take minimum of calculated base and global limit
+        target_chunks = min(base_chunks, max_chunks_total)
+
+        # Ensure at least some chunks if entities/relations exist
+        target_chunks = max(1, target_chunks)
+    else:
+        # Fallback to reasonable default
+        target_chunks = max_related_chunks
+
+    logger.info(f"Dynamic unified chunk allocation: {total_entities} total entities/relations -> targeting {target_chunks} chunks")
+
+    # Step 5: Apply selection algorithm on occurrence-sorted chunks
+    selected_chunks = []
+
+    if kg_chunk_pick_method == "VECTOR" and query and chunks_vdb:
+        # Get embedding function
+        embedding_func_config = text_chunks_db.embedding_func
+        if not embedding_func_config:
+            raise ValueError("No embedding function found for unified chunks sorting with VECTOR method")
+
+        actual_embedding_func = embedding_func_config.func
+        if not actual_embedding_func:
+            raise ValueError("Embedding function is None for unified chunks sorting with VECTOR method")
+
+        # Create mock structure for compatibility with pick_by_vector_similarity
+        mock_entities_with_chunks = [{
+            "chunks": [chunk.get("chunk_id") for chunk in sorted_chunks if chunk.get("chunk_id")],
+            "sorted_chunks": [chunk.get("chunk_id") for chunk in sorted_chunks if chunk.get("chunk_id")]
+        }]
+
+        # Select chunks using vector similarity on occurrence-sorted chunks
+        selected_chunk_ids = await pick_by_vector_similarity(
+            query=query,
+            text_chunks_storage=text_chunks_db,
+            chunks_vdb=chunks_vdb,
+            num_of_chunks=target_chunks,
+            entity_info=mock_entities_with_chunks,
+            embedding_func=actual_embedding_func,
+            query_embedding=query_embedding,
+        )
+
+        if not selected_chunk_ids:
+            raise RuntimeError("No chunks selected by vector similarity in unified processing - this should not happen with valid data")
+
+        # Reorder chunks based on selection
+        chunk_id_to_chunk = {chunk.get("chunk_id"): chunk for chunk in sorted_chunks if chunk.get("chunk_id")}
+        selected_chunks = []
+        for chunk_id in selected_chunk_ids:
+            if chunk_id in chunk_id_to_chunk:
+                selected_chunks.append(chunk_id_to_chunk[chunk_id])
+
+    elif kg_chunk_pick_method == "WEIGHT":
+        # Use weighted polling on occurrence-sorted chunks
+        mock_entities_with_chunks = [{
+            "chunks": [chunk.get("chunk_id") for chunk in sorted_chunks if chunk.get("chunk_id")],
+            "sorted_chunks": [chunk.get("chunk_id") for chunk in sorted_chunks if chunk.get("chunk_id")]
+        }]
+
+        selected_chunk_ids = pick_by_weighted_polling(
+            mock_entities_with_chunks, target_chunks, min_related_chunks=1
+        )
+
+        # Reorder chunks based on selection
+        chunk_id_to_chunk = {chunk.get("chunk_id"): chunk for chunk in sorted_chunks if chunk.get("chunk_id")}
+        selected_chunks = []
+        for chunk_id in selected_chunk_ids:
+            if chunk_id in chunk_id_to_chunk:
+                selected_chunks.append(chunk_id_to_chunk[chunk_id])
+
+    logger.info(f"Unified chunk selection completed: {len(selected_chunks)} chunks selected from {len(sorted_chunks)} candidates")
+    return selected_chunks
 
 
 def _calculate_relevance_scores_vectorized(
@@ -4437,36 +4591,27 @@ async def _build_query_context(
         # Combine relation chunks: initial + expanded, then re-sort  
         combined_relation_chunks = initial_chunks["relation_chunks"] + expanded_relation_chunks
         
-        # Re-sort combined chunks using the same sorting logic as initial chunks
-        # Sort entity chunks: initial + expanded together using occurrence count + VECTOR/WEIGHT methods
-        if combined_entity_chunks:
-            logger.debug(f"Sorting combined entity chunks: {len(combined_entity_chunks)} total chunks")
-            combined_entity_chunks = await _sort_combined_chunks(
-                combined_entity_chunks,
-                chunk_type="entity",
-                query=query,
-                text_chunks_db=text_chunks_db,
-                chunks_vdb=chunks_vdb,
-                query_param=query_param,
-                query_embedding=query_embedding,
-            )
-            
-        if combined_relation_chunks:
-            logger.debug(f"Sorting combined relation chunks: {len(combined_relation_chunks)} total chunks")
-            combined_relation_chunks = await _sort_combined_chunks(
-                combined_relation_chunks,
-                chunk_type="relation", 
-                query=query,
-                text_chunks_db=text_chunks_db,
-                chunks_vdb=chunks_vdb,
-                query_param=query_param,
-                query_embedding=query_embedding,
-            )
+        # Use unified chunk processing: merge all chunks, deduplicate, sort by occurrence count,
+        # then select by vector similarity for global optimization
+        logger.debug(f"Starting unified chunk processing: {len(combined_entity_chunks)} entity + {len(combined_relation_chunks)} relation chunks")
+
+        all_selected_chunks = await _process_all_chunks_unified(
+            entity_chunks=combined_entity_chunks,
+            relation_chunks=combined_relation_chunks,
+            entities_context=entities_context,
+            relations_context=relations_context,
+            query=query,
+            text_chunks_db=text_chunks_db,
+            chunks_vdb=chunks_vdb,
+            query_param=query_param,
+            query_embedding=query_embedding,
+        )
 
         logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations")
-        logger.info(f"Combined chunks: Entity: {len(combined_entity_chunks)}, Relation: {len(combined_relation_chunks)}")
+        logger.info(f"Unified chunk selection: {len(all_selected_chunks)} total chunks selected")
         
-        # Prepare final chunks for round-robin merge using the new combined chunks
+        # Prepare final chunks for round-robin merge
+        # Vector chunks from initial search (if any)
         final_vector_chunks = []
         for chunk in initial_chunks["vector_chunks"]:
             final_vector_chunks.append({
@@ -4476,38 +4621,27 @@ async def _build_query_context(
                 "timestamp": chunk.get("timestamp", ""),
                 "source": "vector",
             })
-        
-        final_entity_chunks = []
-        for chunk in combined_entity_chunks:
-            final_entity_chunks.append({
+
+        # Unified selected chunks (already processed and optimized)
+        final_unified_chunks = []
+        for chunk in all_selected_chunks:
+            final_unified_chunks.append({
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
                 "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
                 "timestamp": chunk.get("timestamp", ""),
-                "source": "entity",  # Standardize all entity chunks to "entity" source
+                "source": chunk.get("source", "unified"),  # Preserve original source if available
             })
         
-        final_relation_chunks = []
-        for chunk in combined_relation_chunks:
-            final_relation_chunks.append({
-                "content": chunk["content"],
-                "file_path": chunk.get("file_path", "unknown_source"),
-                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
-                "timestamp": chunk.get("timestamp", ""),
-                "source": "relation",  # Standardize all relation chunks to "relation" source
-            })
-        
-        # Apply round-robin merge with deduplication using the new combined chunks
+        # Apply round-robin merge with deduplication between vector and unified chunks
         final_merged_chunks = []
         seen_chunk_ids = set()
-        max_len = max(len(final_vector_chunks), len(final_entity_chunks), 
-                     len(final_relation_chunks)) if any([
-                     final_vector_chunks, final_entity_chunks, 
-                     final_relation_chunks]) else 0
+        max_len = max(len(final_vector_chunks), len(final_unified_chunks)) if any([
+                     final_vector_chunks, final_unified_chunks]) else 0
         
         for i in range(max_len):
-            # Add from each source in round-robin fashion: vector → entity (initial+expanded) → relation (initial+expanded)
-            for chunk_list in [final_vector_chunks, final_entity_chunks, final_relation_chunks]:
+            # Add from each source in round-robin fashion: vector → unified (entity+relation)
+            for chunk_list in [final_vector_chunks, final_unified_chunks]:
                 if i < len(chunk_list):
                     chunk = chunk_list[i]
                     chunk_id = chunk.get("chunk_id", "")
@@ -4519,8 +4653,8 @@ async def _build_query_context(
                             "chunk_id": chunk_id,
                             "timestamp": chunk.get("timestamp", ""),
                         })
-        
-        total_chunks_before = len(final_vector_chunks) + len(final_entity_chunks) + len(final_relation_chunks)
+
+        total_chunks_before = len(final_vector_chunks) + len(final_unified_chunks)
         # logger.info(f"Round-robin merged total chunks from {total_chunks_before} to {len(final_merged_chunks)}")
         
         # Apply chunk_top_k truncation if specified
@@ -4946,13 +5080,18 @@ async def _find_most_related_edges_from_entities(
     all_edges = []
     seen = set()
 
+    # Create set for fast lookup of entity names (only internal connections between these entities)
+    entity_names_set = set(node_names)
+
     for node_name in node_names:
         this_edges = batch_edges_dict.get(node_name, [])
         for e in this_edges:
-            sorted_edge = tuple(sorted(e))
-            if sorted_edge not in seen:
-                seen.add(sorted_edge)
-                all_edges.append(sorted_edge)
+            # Only keep edges where both endpoints are in our seed entities (internal connections)
+            if e[0] in entity_names_set and e[1] in entity_names_set:
+                sorted_edge = tuple(sorted(e))
+                if sorted_edge not in seen:
+                    seen.add(sorted_edge)
+                    all_edges.append(sorted_edge)
 
     # Prepare edge pairs in two forms:
     # For the batch edge properties function, use dicts.
