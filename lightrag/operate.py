@@ -3261,62 +3261,50 @@ async def _find_relations_for_entities(
 
 def _merge_three_way_entities(
     multihop_entities: list[dict],
-    ppr_entities: list[dict], 
+    ppr_entities: list[dict],
     fastrp_entities: list[dict]
 ) -> list[dict]:
-    """Merge and deduplicate entities from three sources with discovery method tracking."""
-    
+    """Merge and deduplicate entities from three sources."""
+
     seen_entities = set()
     merged = []
-    
-    # Track discovery methods for each entity
     entity_methods = {}
-    
-    # Add multi-hop entities first (they have higher priority as they're contextually relevant)
-    for entity in multihop_entities:
-        entity_name = entity.get("entity_name", "")
-        if entity_name and entity_name not in seen_entities:
-            entity_copy = dict(entity)
-            entity_copy["discovery_method"] = "multihop"
-            entity_methods[entity_name] = ["multihop"]
-            merged.append(entity_copy)
-            seen_entities.add(entity_name)
-    
-    # Add PPR entities that aren't already included
-    for entity in ppr_entities:
-        entity_name = entity.get("entity_name", "")
-        if entity_name and entity_name not in seen_entities:
-            entity_copy = dict(entity)
-            entity_copy["discovery_method"] = "ppr"
-            entity_methods[entity_name] = ["ppr"]
-            merged.append(entity_copy)
-            seen_entities.add(entity_name)
-        elif entity_name in entity_methods:
-            # Entity found by multiple methods, update discovery method
-            entity_methods[entity_name].append("ppr")
-    
-    # Add FastRP entities that aren't already included
-    for entity in fastrp_entities:
-        entity_name = entity.get("entity_name", "")
-        if entity_name and entity_name not in seen_entities:
-            entity_copy = dict(entity)
-            entity_copy["discovery_method"] = "fastrp"
-            entity_methods[entity_name] = ["fastrp"]
-            merged.append(entity_copy)
-            seen_entities.add(entity_name)
-        elif entity_name in entity_methods:
-            # Entity found by multiple methods, update discovery method
-            entity_methods[entity_name].append("fastrp")
-    
+
+    # Combine all entities from three sources
+    all_entities = [
+        (multihop_entities, "multihop"),
+        (ppr_entities, "ppr"),
+        (fastrp_entities, "fastrp")
+    ]
+
+    # Process all entities and track discovery methods
+    for entities, method in all_entities:
+        for entity in entities:
+            entity_name = entity.get("entity_name", "")
+            if not entity_name:
+                continue
+
+            if entity_name not in seen_entities:
+                # First time seeing this entity, add it
+                entity_copy = dict(entity)
+                entity_copy["discovery_method"] = method
+                entity_methods[entity_name] = [method]
+                merged.append(entity_copy)
+                seen_entities.add(entity_name)
+            else:
+                # Entity already seen, just update discovery methods
+                if entity_name in entity_methods:
+                    entity_methods[entity_name].append(method)
+
     # Update discovery method for entities found by multiple sources
     for entity in merged:
         entity_name = entity.get("entity_name", "")
         if entity_name in entity_methods and len(entity_methods[entity_name]) > 1:
             methods = "+".join(sorted(entity_methods[entity_name]))
             entity["discovery_method"] = methods
-    
+
     logger.info(f"Three-way entity merge: multihop={len(multihop_entities)}, ppr={len(ppr_entities)}, fastrp={len(fastrp_entities)} -> total={len(merged)}")
-    
+
     return merged
 
 
@@ -3346,110 +3334,6 @@ def _merge_three_way_relations(
             seen_relations.add(key)
     
     logger.info(f"Three-way relation merge: multihop={len(multihop_relations)}, ppr={len(ppr_relations)}, fastrp={len(fastrp_relations)} -> total={len(merged)}")
-    
-    return merged
-
-
-def _merge_and_deduplicate_entities(
-    semantic_entities: list[dict], 
-    structural_entities: list[dict], 
-    max_total: int
-) -> list[dict]:
-    """Merge and deduplicate entities from semantic and structural paths."""
-    
-    # Use entity_name as the deduplication key
-    seen_entities = set()
-    merged = []
-    
-    # First, add semantic entities (preserve semantic priority)
-    for entity in semantic_entities:
-        entity_name = entity.get("entity_name", "")
-        if entity_name and entity_name not in seen_entities:
-            entity_copy = dict(entity)
-            entity_copy["discovery_method"] = "semantic"
-            merged.append(entity_copy)
-            seen_entities.add(entity_name)
-    
-    # Then, add structural entities that aren't already included
-    for entity in structural_entities:
-        entity_name = entity.get("entity_name", "")
-        if entity_name and entity_name not in seen_entities:
-            merged.append(entity)  # Already has discovery_method = "structural"
-            seen_entities.add(entity_name)
-    
-    # Limit to max_total, preferring diversity
-    if len(merged) > max_total:
-        # Sort by discovery method diversity and relevance
-        semantic_count = sum(1 for e in merged if e.get("discovery_method") == "semantic")
-        structural_count = len(merged) - semantic_count
-        
-        # Keep a balanced mix if possible
-        target_semantic = min(semantic_count, max_total // 2)
-        target_structural = max_total - target_semantic
-        
-        final_entities = []
-        semantic_added = structural_added = 0
-        
-        for entity in merged:
-            if len(final_entities) >= max_total:
-                break
-                
-            if entity.get("discovery_method") == "semantic" and semantic_added < target_semantic:
-                final_entities.append(entity)
-                semantic_added += 1
-            elif entity.get("discovery_method") == "structural" and structural_added < target_structural:
-                final_entities.append(entity) 
-                structural_added += 1
-        
-        # Fill remaining slots with any remaining entities
-        remaining_slots = max_total - len(final_entities)
-        for entity in merged:
-            if len(final_entities) >= max_total:
-                break
-            if entity not in final_entities:
-                final_entities.append(entity)
-                remaining_slots -= 1
-                if remaining_slots <= 0:
-                    break
-                    
-        merged = final_entities
-    
-    return merged
-
-
-def _merge_and_deduplicate_relations(
-    semantic_relations: list[dict], 
-    structural_relations: list[dict]
-) -> list[dict]:
-    """Merge and deduplicate relations from both paths."""
-    
-    seen_relations = set()
-    merged = []
-    
-    # Create unique keys for relations (src_id + tgt_id + relation_type)
-    def relation_key(rel):
-        src_id = rel.get("src_id", "")
-        tgt_id = rel.get("tgt_id", "")
-        rel_type = rel.get("keywords", "")
-        return f"{src_id}|{tgt_id}|{rel_type}"
-    
-    # Add semantic relations first
-    for relation in semantic_relations:
-        key = relation_key(relation)
-        if key not in seen_relations:
-            relation_copy = dict(relation)
-            relation_copy["discovery_method"] = "semantic"
-            merged.append(relation_copy)
-            seen_relations.add(key)
-    
-    # Add unique structural relations
-    for relation in structural_relations:
-        key = relation_key(relation)
-        if key not in seen_relations:
-            relation_copy = dict(relation)
-            relation_copy["discovery_method"] = "structural"
-            merged.append(relation_copy)
-            seen_relations.add(key)
     
     return merged
 
