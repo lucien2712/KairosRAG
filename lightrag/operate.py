@@ -2927,33 +2927,24 @@ async def _multi_hop_expand(
     relationships_vdb: BaseVectorStorage,
     global_config: dict[str, str] = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Multi-hop expansion using BFS with relevance scoring.
+    """Multi-hop expansion using a three-way parallel approach 
+    (Multi-hop + PPR + FastRP).
     
-    If top_fastrp_nodes > 0, performs dual-path expansion combining
-    semantic and structural reasoning.
+    The activation of each method is controlled by its respective parameters 
+    (e.g., top_ppr_nodes).
     """
     
     if query_param.max_hop <= 0:
         return [], []
         
-    # Check if dual-path expansion is enabled (when top_fastrp_nodes > 0)
-    if (query_param.top_fastrp_nodes > 0 and 
-        global_config and 
-        global_config.get("enable_node_embedding", False) and 
-        global_config.get("node_embedding")):
-        
-        logger.info(f"Semantic expansion + structural analysis: top_fastrp_nodes={query_param.top_fastrp_nodes}")
-        return await _semantic_expansion_plus_structural_analysis(
-            seed_nodes, ll_keywords, hl_keywords, query_param, 
-            knowledge_graph_inst, entities_vdb, relationships_vdb, global_config
-        )
-    else:
-        # Original single-path expansion
-        logger.info("Single-path multi-hop expansion (original logic)")
-        return await _original_multi_hop_expand(
-            seed_nodes, ll_keywords, hl_keywords, query_param,
-            knowledge_graph_inst, entities_vdb, relationships_vdb
-        )
+    # The 3-perspective expansion is the only expansion strategy.
+    # The individual methods (PPR, FastRP) will gracefully deactivate 
+    # if their parameters are 0 or if the node_embedding engine is not configured.
+    # The semantic multi-hop (_original_multi_hop_expand) will always run as part of this.
+    return await _semantic_expansion_plus_structural_analysis(
+        seed_nodes, ll_keywords, hl_keywords, query_param, 
+        knowledge_graph_inst, entities_vdb, relationships_vdb, global_config
+    )
 
 
 async def _semantic_expansion_plus_structural_analysis(
