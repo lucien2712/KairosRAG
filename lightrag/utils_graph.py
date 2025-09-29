@@ -805,9 +805,6 @@ async def amerge_entities(
 
                 # Skip relationships between source entities to avoid self-loops
                 if new_src == new_tgt:
-                    logger.info(
-                        f"Skipping relationship between source entities: {src} -> {tgt} to avoid self-loop"
-                    )
                     continue
 
                 # Check if the same relationship already exists
@@ -907,17 +904,10 @@ async def amerge_entities(
                 entity_id = compute_mdhash_id(entity_name, prefix="ent-")
                 await entities_vdb.delete([entity_id])
 
-                logger.info(
-                    f"Deleted source entity '{entity_name}' and its vector embedding from database"
-                )
 
             # 10. Save changes
             await _merge_entities_done(
                 entities_vdb, relationships_vdb, chunk_entity_relation_graph
-            )
-
-            logger.info(
-                f"Successfully merged {len(source_entities)} entities into '{target_entity}'"
             )
             return await get_entity_info(
                 chunk_entity_relation_graph,
