@@ -972,7 +972,7 @@ class LightRAG:
             # Flow 2: insert → agentic merging → FastRP & PPR
             logger.info(f"Starting agentic entity merging with threshold {agentic_merging_threshold}")
             merge_result = await self.aagentic_merging(threshold=agentic_merging_threshold)
-            logger.info(f"Agentic merging completed")
+            # logger.info(f"Agentic merging completed: {merge_result}")
             
             # Compute FastRP and PPR after entity merging
             await self._compute_node_embeddings()
@@ -3078,12 +3078,14 @@ class LightRAG:
         
         # Define the merge tool for LLM
         @tool
-        def merge_entities_tool(a_entity_id: str, b_entity_id: str) -> str:
+        async def merge_entities_tool(a_entity_id: str, b_entity_id: str) -> str:
             """
             If two entities represent the same real-world entity, merge b_entity_id into a_entity_id.
             """
             try:
-                self.merge_entities(
+                # print(f"TOOL CALLED: Merging {b_entity_id} -> {a_entity_id}")
+
+                await self.amerge_entities(
                     source_entities=[a_entity_id, b_entity_id],
                     target_entity=a_entity_id,
                     merge_strategy={
@@ -3094,8 +3096,11 @@ class LightRAG:
                         "file_path": "join_unique",
                     },
                 )
+
+                # print(f"TOOL COMPLETED: Merge {b_entity_id} -> {a_entity_id}")
                 return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
             except Exception as e:
+                print(f"TOOL FAILED: Merge {b_entity_id} -> {a_entity_id}, Error: {str(e)}")
                 return f"Merge failed: {str(e)}"
         
         # Bind tools to LLM
@@ -3295,6 +3300,7 @@ class LightRAG:
         llm_evaluated_pairs = 0
         cached_merges = 0
         cached_skips = 0
+        skipped_already_merged = 0  # Track entities that were already merged
         active_entities = set(range(len(entities)))  # Track which entities are still active
         
         for i, j, similarity in candidate_pairs:
@@ -3321,14 +3327,27 @@ class LightRAG:
                 
                 if cached_result['decision'] == 'merged':
                     cached_merges += 1
-                    # Apply cached merge decision silently
+
+                    # Check if both entities still exist in the graph before merging
                     try:
+                        # Get current entities from graph to check existence
+                        current_entities = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
+                        target_entities = await self.chunk_entity_relation_graph.get_node(entity_b['entity_id'])
+
+                        if current_entities is None or target_entities is None:
+                            # One or both entities no longer exist, skip this cached merge
+                            skipped_already_merged += 1
+                            active_entities.discard(j)  # Remove from active set anyway
+                            print(f"SKIPPED: Entities already merged - {entity_a['entity_id']} & {entity_b['entity_id']}")
+                            continue
+
+                        # Both entities exist, proceed with cached merge
                         # Temporarily suppress merge operation logs
                         import logging
                         merge_logger = logging.getLogger('lightrag.utils_graph')
                         original_level = merge_logger.level
                         merge_logger.setLevel(logging.CRITICAL)  # Suppress INFO logs
-                        
+
                         self.merge_entities(
                             source_entities=[entity_a['entity_id'], entity_b['entity_id']],
                             target_entity=entity_a['entity_id'],
@@ -3340,10 +3359,10 @@ class LightRAG:
                                 "file_path": "join_unique",
                             },
                         )
-                        
+
                         # Restore original log level
                         merge_logger.setLevel(original_level)
-                        
+
                         active_entities.discard(j)
                         merged_pairs += 1
                         # Don't print anything for cached merges
@@ -3355,15 +3374,11 @@ class LightRAG:
                 continue
                 
             # Prepare LLM prompt for new evaluation
-            user_prompt = (
-                "Determine whether the two entities are the same. "
-                "Only when you are over 95% confident that A and B refer to the SAME entity, "
-                "invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)`. "
-                "If you are not 95% confident, reply exactly with `NO_MERGE`.\n\n"
-                f"A.entity_id = {entity_a['entity_id']}\n"
-                f"A.description = {entity_a['description']}\n\n"
-                f"B.entity_id = {entity_b['entity_id']}\n"
-                f"B.description = {entity_b['description']}\n"
+            user_prompt = PROMPTS["entity_merge_user"].format(
+                a_entity_id=entity_a['entity_id'],
+                a_description=entity_a['description'],
+                b_entity_id=entity_b['entity_id'],
+                b_description=entity_b['description']
             )
             
             try:
@@ -3376,14 +3391,31 @@ class LightRAG:
                 
                 llm_evaluated_pairs += 1
                 
-                # Check if LLM called the merge tool
-                tool_calls = response.additional_kwargs.get("tool_calls", [])
-                if tool_calls:
-                    # LLM decided to merge - mark entity B as inactive
-                    active_entities.discard(j)
-                    merged_pairs += 1
-                    decision = "merged"
+                # Check if LLM called the merge tool using proper LangChain method
+                if hasattr(response, 'tool_calls') and response.tool_calls:
                     print(f"NEW MERGE: {entity_a['entity_id']} <- {entity_b['entity_id']} (similarity: {similarity:.3f})")
+
+                    # Execute tool calls manually (following your correct example)
+                    merge_successful = False
+                    for call in response.tool_calls:
+                        if call["name"] == "merge_entities_tool":
+                            try:
+                                # Execute the tool with the called arguments
+                                result = await merge_entities_tool.ainvoke(call["args"])
+                                # print(f"Tool execution result: {result}")
+                                merge_successful = True
+                                break
+                            except Exception as e:
+                                # print(f"TOOL EXECUTION FAILED: {str(e)}")
+                                break
+
+                    if merge_successful:
+                        # Mark entity B as inactive after successful merge
+                        active_entities.discard(j)
+                        merged_pairs += 1
+                        decision = "merged"
+                    else:
+                        decision = "skipped"
                 else:
                     decision = "skipped"
                     
@@ -3412,7 +3444,7 @@ class LightRAG:
         except Exception as e:
             print(f"Failed to save entity pair cache: {e}")
         
-        return {
+        result = {
             "total_entities": total_entities,
             "candidate_pairs": len(candidate_pairs),
             "llm_evaluated_pairs": llm_evaluated_pairs,
@@ -3420,11 +3452,23 @@ class LightRAG:
             "new_merges": merged_pairs - cached_merges,
             "cached_merges": cached_merges,
             "cached_skips": cached_skips,
+            "skipped_already_merged": skipped_already_merged,
             "remaining_entities": remaining_entities,
             "processing_time": processing_time,
             "similarity_threshold": threshold,
             "total_cached_pairs": len(entity_pair_cache)
         }
+
+        # Ensure all merge operations are fully completed before finishing
+        if merged_pairs > 0:
+            # print(f"Finalizing {merged_pairs} merge operations...")
+            # Force a final graph persistence to ensure all changes are written
+            await self.chunk_entity_relation_graph.index_done_callback()
+
+        # Print summary
+        # print(f"Agentic merging summary: {merged_pairs} merges ({result['new_merges']} new, {cached_merges} cached), {skipped_already_merged} skipped (already merged)")
+
+        return result
 
     async def _compute_node_embeddings(self):
         """Compute FastRP and PPR embeddings after document insertion (with or without merging)"""
