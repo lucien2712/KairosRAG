@@ -46,25 +46,25 @@ When accumulated descriptions exceed 8,000 tokens (e.g., after inserting 10+ qua
 * **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with edge weights.
 * *Currently implemented for the NanoVectorDB backend.*
 
-**Architecture Overview:**
+**🏗️ Architecture Overview:**
 
 The system processes each query through three independent perspectives and merges results:
 
 1. **Multi-hop Semantic Expansion**: Traditional graph traversal based on query-entity similarity
-2. **Query-aware Global Importance Analysis**: Enhanced PageRank with query-sensitive seed weighting and edge reweighting  
+2. **Query-aware Global Importance Analysis**: Enhanced PageRank with query-sensitive seed weighting and edge reweighting
 3. **Adaptive Structural Analysis**: Enhanced FastRP with edge weights for structure-aware embeddings
 
 **Mathematical Framework:**
 
 $$R_{final} = \text{merge}(R_{multihop}, R_{ppr}, R_{fastrp})$$
 
-**Multi-hop Expansion:**
+**🔄 Multi-hop Expansion:**
 
 $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
 
 where $\delta = 0.8$ (distance decay), $h$ = hop count
 
-**Query-aware Personalized PageRank:**
+**🎯 Query-aware Personalized PageRank:**
 
 $$PPR_{query}(v; S, W, E) = (1-d) \cdot p_{S,W}(v) + d \cdot \sum_{u \to v} \frac{PPR_{query}(u; S, W, E) \cdot e_{reweight}(u,v)}{|out(u)|}$$
 
@@ -74,15 +74,11 @@ where:
 - $p_{S,W}(v)$ = personalization vector with weighted seeds
 - $e_{reweight}(u,v)$ = temporarily adjusted edge weights based on query-relation similarity
 
-**Adaptive FastRP with Edge Weights:**
+**🧬 Adaptive FastRP with Edge Weights:**
 
 $$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
 
 where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edge weights
-
-**Edge Weight Integration:**
-
-The Adaptive FastRP algorithm uses edge weights from the original Graph knowledge graph construction, preserving relationship importance established during insertion time.
 
 ### 🧠 **Adaptive Entity Type Discovery**
 
