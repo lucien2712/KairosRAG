@@ -427,7 +427,7 @@ class NodeEmbeddingEnhancer:
         self,
         valid_seeds: List[str],
         entity_similarities: Dict[str, float],
-        tau: float = 0.1
+        tau: float = 0.01
     ) -> Dict[str, float]:
         """
         Compute query-aware seed weights using softmax on similarity scores.
