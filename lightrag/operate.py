@@ -513,7 +513,7 @@ async def _handle_single_entity_extraction(
 
         # Automatically prepend timestamp to description if provided and not already present
         if timestamp.strip() and not entity_description.startswith(timestamp):
-            entity_description = f"{timestamp}: {entity_description}"
+            entity_description = f"[Time: {timestamp}] {entity_description}"
 
         return dict(
             entity_name=entity_name,
