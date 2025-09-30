@@ -16,6 +16,30 @@ $$Relation'(r, t) = T(t) \oplus Relation(r)$$
 
 where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatenation
 
+**Real-World Example:**
+
+**Single Document Processing:**
+
+*Original Entity Description:*
+> Apple is a technology company that reported strong iPhone sales performance
+
+*After Automatic Timestamp Prefixing (timestamp: "2024-Q3"):*
+> 2024-Q3: Apple is a technology company that reported strong iPhone sales performance
+
+**Multi-Document Merging:**
+
+*After inserting Q2 and Q3 documents:*
+> 2024-Q2: Apple reported iPhone revenue of $45.9 billion and Services revenue of $23.9 billion
+>
+> 2024-Q3: Apple reported iPhone revenue of $39.3 billion and Services revenue of $24.2 billion
+
+**Token-Limit Exceeded with LLM Summary:**
+
+When accumulated descriptions exceed 8,000 tokens (e.g., after inserting 10+ quarterly documents), the system automatically triggers map-reduce summarization:
+
+*LLM-Generated Summary:*
+> Apple demonstrated consistent performance across 2024 quarters. Key trends: iPhone revenue peaked at $45.9B (Q2), declined to $39.3B (Q3); Services grew from $23.9B to $24.2B; strong expansion in emerging markets; iPhone 16 series launched Q4; maintained 44-46% gross margins despite supply chain challenges.
+
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
@@ -35,11 +59,13 @@ The system processes each query through three independent perspectives and merge
 $$R_{final} = \text{merge}(R_{multihop}, R_{ppr}, R_{fastrp})$$
 
 **Multi-hop Expansion:**
+
 $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
 
 where $\delta = 0.8$ (distance decay), $h$ = hop count
 
 **Query-aware Personalized PageRank:**
+
 $$PPR_{query}(v; S, W, E) = (1-d) \cdot p_{S,W}(v) + d \cdot \sum_{u \to v} \frac{PPR_{query}(u; S, W, E) \cdot e_{reweight}(u,v)}{|out(u)|}$$
 
 where:
@@ -49,11 +75,13 @@ where:
 - $e_{reweight}(u,v)$ = temporarily adjusted edge weights based on query-relation similarity
 
 **Adaptive FastRP with Edge Weights:**
+
 $$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
 
 where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edge weights
 
 **Edge Weight Integration:**
+
 The Adaptive FastRP algorithm uses edge weights from the original Graph knowledge graph construction, preserving relationship importance established during insertion time.
 
 ### 🧠 **Adaptive Entity Type Discovery**
