@@ -35,7 +35,7 @@ where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatena
 
 **Token-Limit Exceeded with LLM Summary:**
 
-When accumulated descriptions exceed 8,000 tokens (e.g., after inserting 10+ quarterly documents), the system automatically triggers map-reduce summarization:
+When accumulated descriptions exceed n tokens (e.g., after inserting 10+ quarterly documents), the system automatically triggers summarization:
 
 *LLM-Generated Summary:*
 > Apple demonstrated consistent performance across 2024 quarters. Key trends: iPhone revenue peaked at $45.9B (Q2), declined to $39.3B (Q3); Services grew from $23.9B to $24.2B; strong expansion in emerging markets; iPhone 16 series launched Q4; maintained 44-46% gross margins despite supply chain challenges.
@@ -60,9 +60,16 @@ $$R_{final} = \text{merge}(R_{multihop}, R_{ppr}, R_{fastrp})$$
 
 **🔄 Multi-hop Expansion:**
 
+Graph traversal that expands from seed entities through neighbors, scoring candidates by entity-query similarity and relationship-query similarity.
+
 $$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
 
-where $\delta = 0.8$ (distance decay), $h$ = hop count
+where:
+- $\alpha = 0.4$ (entity similarity weight)
+- $\beta = 0.4$ (relationship similarity weight)
+- $\gamma = 0.02$ (distance decay weight)
+- $\delta = 0.8$ (decay factor per hop)
+- $h$ = hop count (distance from seed entities)
 
 **🎯 Query-aware Personalized PageRank:**
 
@@ -93,15 +100,18 @@ where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edg
 
 **Mathematical Framework:**
 
-**Vector Similarity Pre-filtering:**
+- **Vector Similarity Pre-filtering:**
+
 $$C = \{(e_i, e_j) | cosine(emb(e_i), emb(e_j)) > \theta, i < j\}$$
 
 where $\theta$ = similarity threshold (e.g., 0.8)
 
-**LLM Decision Function:**
+- **LLM Decision Function:**
+
 $$M(e_i, e_j) = \mathbb{I}[LLM_{confidence}("Should\ merge?", context(e_i, e_j)) > 0.95]$$
 
-**Merge Operation:**
+- **Merge Operation:**
+
 $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 
 ### 📊 **Table-Aware Document Processing**
