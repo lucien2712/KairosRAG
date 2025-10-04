@@ -626,22 +626,26 @@ PROMPTS["entity_type_refinement_system"] = """
 You are an advanced linguistic assistant with expertise in Named Entity Recognition (NER) across multiple domains.
 
 ## Task:
-Refine a list of entity types by removing duplicates or semantically overlapping types, ensuring domain-appropriate optimization.
+Refine a list of entity types by aggressively removing duplicates or semantically overlapping types, ensuring a concise and well-optimized schema.
 
-## Requirements:
-- Ensure each type is distinct, meaningful, and concise
-- Remove redundant or overlapping entity types
-- Keep the most comprehensive and well-defined entity type when merging similar ones
-- Prioritize domain-specific entity types over overly generic classifications
-- Consider the document context and extraction requirements when evaluating usefulness
-- Maintain clear and accurate explanations with relevant examples
-- Return the refined list in strict JSON array format only
+## Critical Requirements:
+- **STRICT CONSOLIDATION**: Aggressively merge similar or overlapping entity types
+- **QUALITY OVER QUANTITY**: Aim for the minimum number of entity types that provide maximum coverage
+- **HIERARCHICAL MERGING**: Merge child types into broader parent categories when possible
+- **NO REDUNDANCY**: Remove any types that can be represented by existing types
+- **DOMAIN FOCUS**: Keep only entity types that are essential for the specific document domain
+
+## Consolidation Guidelines:
+1. **Merge Overlapping Types**: Combine types with >70% semantic overlap (e.g., "Company" + "Organization" → "Organization")
+2. **Eliminate Sub-types**: Remove specific sub-types if parent type exists (e.g., "CEO" → "Person", "Apple Inc." → "Organization")
+3. **Remove Generic Types**: Eliminate vague types like "Concept", "Thing", "Item", "Other", "Unknown"
+4. **Combine Related Types**: Merge related types into broader categories (e.g., "Product" + "Service" → "Offering")
+5. **Preserve Core Types Only**: Keep only types that represent fundamentally different entity categories
 
 ## Domain-Specific Considerations:
-- Prefer specific, actionable entity types over generic ones (e.g., "research_method" over "concept")
-- Maintain appropriate granularity for the document domain
-- Preserve important distinctions within specialized fields
-- Consider extraction patterns and relationship building potential
+- **Financial Documents**: Organization, Person, Financial_Metric, Temporal_Range 
+- **Academic Papers**: Organization, Person, Research_Method, Publication
+- **Technical Documents**: Organization, Person, Component, Specification 
 
 ## Response Format:
 [
@@ -651,24 +655,63 @@ Refine a list of entity types by removing duplicates or semantically overlapping
 }
 ]
 
-## Example:
+## Example 1 - Aggressive Consolidation:
 ### Entity Types List to Refine:
 [
-    {
-        "entity_type": "Company",
-        "explanation": "A company is a legal entity formed by a group of individuals or entities to engage in business activities."
-    },
-    {
-        "entity_type": "Organization", 
-        "explanation": "An organization is a group of individuals or entities that work together to achieve a common goal."
-    }
+    {"entity_type": "Company", "explanation": "A company is a legal entity..."},
+    {"entity_type": "Organization", "explanation": "An organization is a group..."},
+    {"entity_type": "Institution", "explanation": "An institution is a formal organization..."},
+    {"entity_type": "Corporation", "explanation": "A corporation is a type of company..."},
+    {"entity_type": "CEO", "explanation": "A chief executive officer..."},
+    {"entity_type": "Employee", "explanation": "A person working for an organization..."},
+    {"entity_type": "Person", "explanation": "An individual person..."},
+    {"entity_type": "Human", "explanation": "A human being..."}
 ]
 
 ### Refined List:
 [
     {
         "entity_type": "Organization",
-        "explanation": "An organization is a group of individuals or entities that work together to achieve a common goal."
+        "explanation": "An entity representing organizations, companies, institutions, or corporations (consolidated from Company, Organization, Institution, Corporation)."
+    },
+    {
+        "entity_type": "Person",
+        "explanation": "An entity representing individual persons including executives, employees, and other human entities (consolidated from Person, Human, CEO, Employee)."
+    }
+]
+
+## Example 2 - Domain-Specific Consolidation:
+### Entity Types List to Refine:
+[
+    {"entity_type": "Revenue", "explanation": "Company revenue..."},
+    {"entity_type": "Profit", "explanation": "Company profit..."},
+    {"entity_type": "Loss", "explanation": "Financial loss..."},
+    {"entity_type": "Growth_Rate", "explanation": "Growth percentage..."},
+    {"entity_type": "Margin", "explanation": "Profit margin..."},
+    {"entity_type": "Metric", "explanation": "Performance metric..."},
+    {"entity_type": "Quarter", "explanation": "Fiscal quarter..."},
+    {"entity_type": "Year", "explanation": "Fiscal year..."},
+    {"entity_type": "Time_Period", "explanation": "Time period..."},
+    {"entity_type": "Fiscal_Period", "explanation": "Fiscal period..."}
+]
+
+### Refined List:
+[
+    {
+        "entity_type": "Organization",
+        "explanation": "Organizations, companies, or institutions."
+    },
+    {
+        "entity_type": "Person",
+        "explanation": "Individual persons."
+    },
+    {
+        "entity_type": "Financial_Metric",
+        "explanation": "Financial measurements including revenue, profit, loss, growth rate, margin, and other performance metrics (consolidated from Revenue, Profit, Loss, Growth_Rate, Margin, Metric)."
+    },
+    {
+        "entity_type": "Temporal_Range",
+        "explanation": "Time periods including quarters (Q1-Q4), fiscal years, and other temporal ranges (consolidated from Quarter, Year, Time_Period, Q1, Q2, Fiscal_Period)."
     }
 ]
 """
@@ -678,5 +721,24 @@ PROMPTS["entity_type_refinement_user"] = """
 {entity_types}
 
 ## Task:
-Please refine this list by removing duplicates or semantically similar entity types. Keep the most appropriate and comprehensive entity type when consolidating similar ones.
+**CRITICAL**: Aggressively consolidate this list to the minimum number of entity types needed.
+
+**Your Goals:**
+1. **Maximize Consolidation**: Merge as many similar types as possible
+2. **Eliminate Redundancy**: Remove any type that can be covered by another type
+3. **Preserve Coverage**: Ensure the final types still cover all important entity categories
+
+**Action Steps:**
+- Group semantically similar types together
+- For each group, select the most comprehensive type name
+- Merge explanations to reflect consolidated coverage
+- Remove sub-types that are covered by parent types
+- Eliminate generic or vague type names
+
+**Quality Check:**
+- Can any two types be merged? If yes, merge them.
+- Is each type fundamentally different from others? If no, consolidate.
+- Does each type capture unique entities? If no, remove it.
+
+Please provide the refined list in strict JSON array format.
 """

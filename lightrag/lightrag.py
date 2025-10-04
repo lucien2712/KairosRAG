@@ -21,6 +21,7 @@ from typing import (
     Optional,
     List,
     Dict,
+    Union,
 )
 from lightrag.constants import (
     DEFAULT_MAX_GLEANING,
@@ -3526,52 +3527,56 @@ class LightRAG:
             # Don't raise the error to avoid breaking the insert process
 
     # Entity Type Augmentation Methods
-    def entity_type_aug(self, input_folder: str = None, force_refresh: bool = False) -> dict:
+    def entity_type_aug(self, input_folder: str = None, texts: Union[str, list[str]] = None, force_refresh: bool = False) -> dict:
         """Synchronously augment entity types by analyzing documents.
-        
+
         This method analyzes documents to discover new entity types using LLM,
         then automatically reloads the updated entity types for use in future operations.
-        
+
         Args:
             input_folder: Optional folder containing .txt files to analyze.
-                         If None, uses documents from text_chunks_db.
+            texts: Optional text content (string or list of strings) to analyze.
+                  If provided, takes priority over input_folder.
             force_refresh: Whether to reprocess already processed files.
-            
+
         Returns:
             dict: Results containing new and refined entity types.
         """
         loop = always_get_an_event_loop()
         return loop.run_until_complete(
-            self.aentity_type_aug(input_folder, force_refresh)
+            self.aentity_type_aug(input_folder, texts, force_refresh)
         )
 
-    async def aentity_type_aug(self, input_folder: str = None, force_refresh: bool = False) -> dict:
+    async def aentity_type_aug(self, input_folder: str = None, texts: Union[str, list[str]] = None, force_refresh: bool = False) -> dict:
         """Asynchronously augment entity types by analyzing documents.
-        
+
         This method analyzes documents to discover new entity types using LLM,
         then automatically reloads the updated entity types for use in future operations.
-        
+
         Args:
             input_folder: Optional folder containing .txt files to analyze.
-                         If None, uses documents from text_chunks_db.
+            texts: Optional text content (string or list of strings) to analyze.
+                  If provided, takes priority over input_folder and chunks_db.
             force_refresh: Whether to reprocess already processed files.
-            
+
         Returns:
             dict: Results containing new and refined entity types.
         """
         logger.info("Starting entity type augmentation process")
-        
+
         try:
             # Step 1: Load existing entity types from working_dir
             current_entity_types = self._load_existing_entity_types()
             logger.info(f"Loaded {len(current_entity_types)} existing entity types")
-            
-            # Step 2: Get documents to process
-            if input_folder:
+
+            # Step 2: Get documents to process (priority: texts > input_folder > chunks_db)
+            if texts is not None:
+                file_text_pairs = self._process_texts(texts)
+            elif input_folder:
                 file_text_pairs = self._process_files_from_folder(input_folder, force_refresh)
             else:
                 file_text_pairs = await self._process_files_from_chunks_db(force_refresh)
-                
+
             if not file_text_pairs:
                 logger.info("No new files to process")
                 return {
@@ -3581,7 +3586,7 @@ class LightRAG:
                     "new_entity_types": 0,
                     "total_entity_types": len(current_entity_types)
                 }
-                
+
             logger.info(f"Processing {len(file_text_pairs)} documents for entity type augmentation")
             
             # Step 3: Process files with LLM to suggest new entity types
@@ -3731,6 +3736,36 @@ class LightRAG:
         for file_name, _ in file_text_pairs:
             status[file_name] = True
         self._save_processing_status(status)
+
+    def _process_texts(self, texts: Union[str, list[str]]) -> list:
+        """Process text content directly without file I/O.
+
+        Args:
+            texts: String or list of strings to analyze.
+
+        Returns:
+            list: List of (identifier, text_content) tuples.
+        """
+        import hashlib
+
+        file_text_pairs = []
+
+        # Convert single string to list for uniform processing
+        if isinstance(texts, str):
+            texts = [texts]
+
+        for idx, text_content in enumerate(texts):
+            if text_content.strip():  # Only add non-empty texts
+                # Use content hash as identifier for deduplication
+                content_hash = hashlib.md5(text_content.encode('utf-8')).hexdigest()[:16]
+                identifier = f"text_{idx+1}_{content_hash}"
+                file_text_pairs.append((identifier, text_content))
+                logger.info(f"Added text content: {identifier}")
+            else:
+                logger.warning(f"Skipped empty text at index {idx}")
+
+        logger.info(f"Selected {len(file_text_pairs)} text items for processing")
+        return file_text_pairs
 
     def _process_files_from_folder(self, folder_path: str, force_refresh: bool = False) -> list:
         """Process files from a specified folder."""

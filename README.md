@@ -92,6 +92,24 @@ where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edg
 * **Problem**: Predefined static schemas (e.g., Person, Organization, Category) often misclassify domain-specific metrics (e.g., EPS, Operating Margin).
 * **Solution**: KairosRAG dynamically suggests and augments **domain-specific entity types** during extraction, improving recognition accuracy and retrieval relevance.
 
+**Usage Examples:**
+
+```python
+# Option 1: Analyze documents from a folder (e.g., PDF files converted to .txt)
+result = rag.entity_type_aug(input_folder="./financial_reports/")
+
+# Option 2: Analyze text content directly (recommended for in-memory processing)
+documents = [
+    "Apple Q3 2024 Earnings Call - iPhone revenue $39.3B, up 1.5% YoY...",
+    "Microsoft Azure grew 29% to $25.4B with AI integration..."
+]
+result = rag.entity_type_aug(texts=documents)
+
+# Option 3: Force refresh to reprocess already-analyzed content
+result = rag.entity_type_aug(texts=documents, force_refresh=True)
+```
+
+
 ### ⚡ **Agentic Entity Canonicalization**
 
 * **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision, especially when Adaptive FastRP/PPR compute embeddings before entity merging.
@@ -147,8 +165,9 @@ async def main():
     )
     await rag.initialize_storages()
     
-    # Adaptive entity type discovery
-    rag.entity_type_aug("input_folder/")
+    # Adaptive entity type discovery from text content
+    documents = ["Apple Q3 2024 earnings...", "Microsoft Azure revenue..."]
+    rag.entity_type_aug(texts=documents)  # Or use input_folder="./reports/"
 
     # Insert with automatic timestamp integration and agentic merging
     await rag.insert(
@@ -178,9 +197,10 @@ if __name__ == "__main__":
 
 ## 🏗️ Workflow
 
-```bash
+```python
 # 1. Discover entity types for your domain
-rag.entity_type_aug("input_folder/")
+documents = ["Apple Q3 2024 earnings...", "Microsoft Azure revenue..."]
+rag.entity_type_aug(texts=documents)  # Or: input_folder="./reports/"
 
 # 2. Insert documents with timestamps (tables processed automatically)
 rag.insert(docs_with_tables, timestamps=["2024-Q3"], file_paths=["report.pdf"], agentic_merging=True, agentic_merging_threshold=0.8)
