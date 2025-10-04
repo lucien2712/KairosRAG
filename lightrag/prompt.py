@@ -278,9 +278,11 @@ Your task is to synthesize a list of descriptions of a given entity or relation 
 ---Instructions---
 1. **Comprehensiveness:** The summary must integrate key information from all provided descriptions. Do not omit important facts.
 2. **Context:** The summary must explicitly mention the name of the entity or relation for full context.
-3. **Temporal Information:** When descriptions contain timestamp prefixes (e.g., "[Time: Fiscal Year 2024-Q1]", "[Time: Fiscal Year 2024-Q3]", "[Time: 2024-07]"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
+3. **Temporal Information:**
+   - **If descriptions contain timestamp prefixes** (e.g., "[Time: Fiscal Year 2024-Q1]", "[Time: Fiscal Year 2024-Q3]", "[Time: 2024-07]"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
+   - **If descriptions do NOT contain timestamp prefixes**, synthesize the information naturally without adding or inventing temporal markers.
 
-**Example:**
+**Example with timestamps:**
 Input descriptions:
 - "[Time: Fiscal Year 2024-Q1] Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
 - "[Time: Fiscal Year 2024-Q3] Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
@@ -288,7 +290,15 @@ Input descriptions:
 Required output format:
 "Apple technology company shows mixed quarterly performance. [Time: Fiscal Year 2024-Q1] Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. [Time: Fiscal Year 2024-Q3] Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
 
-DO NOT generate: "Apple technology company performance varied across 2024 quarters with early growth followed by later challenges."
+**Example without timestamps:**
+Input descriptions:
+- "Apple is a technology company headquartered in Cupertino, California"
+- "Apple designs and manufactures consumer electronics, software, and online services"
+
+Required output format:
+"Apple is a technology company headquartered in Cupertino, California that designs and manufactures consumer electronics, software, and online services."
+
+DO NOT add timestamp prefixes like "[Time: ...]" when they are not present in the original descriptions.
 4. **Conflict Resolution:** In case of conflicting or inconsistent descriptions from different time periods, prioritize more recent information while preserving historical context. If conflicts arise from distinct entities sharing the same name, treat them separately. When temporal information conflicts (e.g., same quarter with different data), note the discrepancy explicitly.
 5. **Relevance Filtering:** Focus on substantive information. Remove redundant phrases while preserving unique details from each description.
 6. **Style:** The output must be written from an objective, third-person perspective.
@@ -304,16 +314,21 @@ Description List:
 """
 
 PROMPTS["entity_continue_extraction"] = """---Task---
-Identify any missed entities or relationships in the last extraction task.
+Based on the last extraction task, identify and extract any **missed or incorrectly formatted** entities and relationships from the input text.
 
 ---Instructions---
-1. Output the entities and realtionships in the same format as previous extraction task.
-2. Do not include entities and relations that have been previously extracted.
-3. If the entity doesn't clearly fit in any of`Entity_types` provided, classify it as "Other".
-4. Return identified entities and relationships in {language}.
-5. Output `{completion_delimiter}` when all the entities and relationships are extracted.
+1.  **Strict Adherence to System Format:** Strictly adhere to all format requirements for entity and relationship lists, including output order, field delimiters, and proper noun handling, as specified in the system instructions.
+2.  **Focus on Corrections/Additions:**
+    *   **Do NOT** re-output entities and relationships that were **correctly and fully** extracted in the last task.
+    *   If an entity or relationship was **missed** in the last task, extract and output it now according to the system format.
+    *   If an entity or relationship was **truncated, had missing fields, or was otherwise incorrectly formatted** in the last task, re-output the *corrected and complete* version in the specified format.
+3.  **Output Format - Entities:** Output a total of 4 fields for each entity, delimited by `{tuple_delimiter}`, on a single line. The first field *must* be the literal string `entity`.
+4.  **Output Format - Relationships:** Output a total of 5 fields for each relationship, delimited by `{tuple_delimiter}`, on a single line. The first field *must* be the literal string `relation`.
+5.  **Output Content Only:** Output *only* the extracted list of entities and relationships. Do not include any introductory or concluding remarks, explanations, or additional text before or after the list.
+6.  **Completion Signal:** Output `{completion_delimiter}` as the final line after all relevant missing or corrected entities and relationships have been extracted and presented.
+7.  **Output Language:** Ensure the output language is {language}. Proper nouns (e.g., personal names, place names, organization names) must be kept in their original language and not translated.
 
----Output---
+<Output>
 """
 
 # TODO: Deprecated

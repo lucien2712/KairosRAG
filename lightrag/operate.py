@@ -512,7 +512,7 @@ async def _handle_single_entity_extraction(
             return None
 
         # Automatically prepend timestamp to description if provided and not already present
-        if timestamp.strip() and not entity_description.startswith(timestamp):
+        if timestamp and timestamp.strip() and not entity_description.startswith(timestamp):
             entity_description = f"[Time: {timestamp}] {entity_description}"
 
         return dict(
@@ -588,7 +588,7 @@ async def _handle_single_relationship_extraction(
         edge_description = sanitize_and_normalize_extracted_text(record_attributes[4])
 
         # Automatically prepend timestamp to description if provided and not already present
-        if timestamp.strip() and not edge_description.startswith(timestamp):
+        if timestamp and timestamp.strip() and not edge_description.startswith(timestamp):
             edge_description = f"{timestamp}: {edge_description}"
 
         edge_source_id = chunk_key
