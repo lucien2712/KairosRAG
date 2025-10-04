@@ -314,18 +314,6 @@ class NodeEmbeddingEnhancer:
         except Exception as e:
             logger.error(f"Error computing Personalized PageRank: {e}")
             return {}
-            
-    # DEPRECATED: Mixed embeddings are not used in the current dual-path approach
-    # This method is kept for potential future use but is not currently called
-    def _combine_embeddings_deprecated(self, text_embeddings: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
-        """
-        DEPRECATED: Combine text embeddings, FastRP embeddings, and PageRank scores.
-        
-        This method created mixed embeddings but is not used in the current dual-path approach.
-        Instead, FastRP embeddings and PageRank scores are used separately in structural path expansion.
-        """
-        # Implementation kept for reference but not used
-        return {}
         
     def extract_reasoning_paths(
         self, 
