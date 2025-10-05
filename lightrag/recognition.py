@@ -122,6 +122,11 @@ async def _batch_recognize_combined(
 ) -> tuple[list[dict], list[dict]]:
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
+
+    處理流程：
+    1. 以 relation 為主進行 batch 切分
+    2. 每個 batch 包含該 batch 的 relations + 這些 relations 涉及的所有 entities
+    3. 最後處理沒有出現在任何 relation 中的落單 entities
     """
     client = OpenAI()
 
@@ -132,16 +137,33 @@ async def _batch_recognize_combined(
         rel_id = f"rel_{i}"
         id_mapping[rel_id] = rel
 
+    # 建立 entity name 到 entity data 的映射
+    entity_map = {e.get("entity_name"): e for e in entities}
+
     filtered_entities = []
     filtered_relations = []
+    entities_in_relations = set()  # 追蹤哪些 entities 出現在 relations 中
 
-    # 批次處理（但現在 entities 和 relations 一起處理）
-    total_items = max(len(entities), len(relations))
-    for i in range(0, total_items, batch_size):
-        entity_batch = entities[i : i + batch_size] if entities else []
-        relation_batch_items = list(id_mapping.items())[i : i + batch_size] if relations else []
-        relation_batch = [rel_data for _, rel_data in relation_batch_items]
+    # Phase 1: 處理 relations (以 relation 為中心的 batch)
+    relation_items = list(id_mapping.items())
+    for i in range(0, len(relation_items), batch_size):
+        relation_batch_items = relation_items[i : i + batch_size]
         relation_batch_ids = {rel_id: rel_data for rel_id, rel_data in relation_batch_items}
+
+        # 收集這個 batch 的 relations 涉及的所有 entities
+        batch_entity_names = set()
+        for rel_id, rel_data in relation_batch_items:
+            src_id = rel_data.get("src_id")
+            tgt_id = rel_data.get("tgt_id")
+            if src_id:
+                batch_entity_names.add(src_id)
+                entities_in_relations.add(src_id)
+            if tgt_id:
+                batch_entity_names.add(tgt_id)
+                entities_in_relations.add(tgt_id)
+
+        # 構建這個 batch 的 entities（只包含 relation 涉及的 entities）
+        entity_batch = [entity_map[name] for name in batch_entity_names if name in entity_map]
 
         # 構建 entities JSON
         entities_data = [
@@ -201,10 +223,13 @@ async def _batch_recognize_combined(
             removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
             removed_relation_ids = set(result.get("irrelevant_relation_ids", []))
 
-            # 保留所有不在移除列表中的 entities
+            # 保留不在移除列表中的 entities（relation batch 中涉及的 entities）
             for entity in entity_batch:
-                if entity.get("entity_name") not in removed_entity_ids:
-                    filtered_entities.append(entity)
+                entity_name = entity.get("entity_name")
+                if entity_name not in removed_entity_ids:
+                    # 檢查是否已經加入過（避免重複）
+                    if not any(e.get("entity_name") == entity_name for e in filtered_entities):
+                        filtered_entities.append(entity)
 
             # 保留所有不在移除列表中的 relations
             for rel_id, rel_data in relation_batch_ids.items():
@@ -213,11 +238,79 @@ async def _batch_recognize_combined(
 
         except Exception as e:
             logger.warning(
-                f"Recognition combined filter failed for batch {i//batch_size + 1}: {e}. "
-                f"Keeping all {len(entity_batch)} entities and {len(relation_batch)} relations in this batch."
+                f"Recognition combined filter failed for relation batch {i//batch_size + 1}: {e}. "
+                f"Keeping all {len(relation_batch_ids)} relations in this batch."
             )
-            filtered_entities.extend(entity_batch)
-            filtered_relations.extend(relation_batch)
+            # 失敗時保留所有 relations
+            for rel_id, rel_data in relation_batch_ids.items():
+                filtered_relations.append(rel_data)
+
+    # Phase 2: 處理落單的 entities（沒有出現在任何 relation 中的）
+    orphan_entities = [e for e in entities if e.get("entity_name") not in entities_in_relations]
+
+    if orphan_entities:
+        logger.info(f"Processing {len(orphan_entities)} orphan entities (not in any relations)")
+
+        # 對落單 entities 進行 batch 處理
+        for i in range(0, len(orphan_entities), batch_size):
+            orphan_batch = orphan_entities[i : i + batch_size]
+
+            # 構建 entities JSON（只有 entities，沒有 relations）
+            entities_data = [
+                {
+                    "entity_name": e.get("entity_name"),
+                    "description": e.get("description", "")
+                }
+                for e in orphan_batch
+            ]
+
+            entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
+            relations_json = "[]"  # 空的 relations
+
+            prompt = PROMPTS["recognition_combined_filter"].format(
+                query=query,
+                entities_json=entities_json,
+                relations_json=relations_json
+            )
+
+            try:
+                # 調用 OpenAI
+                response = await asyncio.to_thread(
+                    lambda: client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.0,
+                    )
+                )
+                response_text = response.choices[0].message.content
+                logger.debug(f"Orphan entities filter LLM raw response: {response_text[:500]}")
+
+                # 提取 JSON
+                result = extract_json_from_response(response_text)
+
+                # 如果提取失敗，保留所有資料
+                if result is None or not isinstance(result, dict):
+                    logger.warning(f"Failed to extract JSON for orphan batch {i//batch_size + 1}, keeping all items")
+                    filtered_entities.extend(orphan_batch)
+                    continue
+
+                # 獲取要移除的 entity IDs
+                removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
+
+                # 保留不在移除列表中的 entities
+                for entity in orphan_batch:
+                    entity_name = entity.get("entity_name")
+                    if entity_name not in removed_entity_ids:
+                        filtered_entities.append(entity)
+
+            except Exception as e:
+                logger.warning(
+                    f"Recognition orphan filter failed for batch {i//batch_size + 1}: {e}. "
+                    f"Keeping all {len(orphan_batch)} orphan entities in this batch."
+                )
+                filtered_entities.extend(orphan_batch)
 
     # Fallback: 如果全部被過濾，保留 top-3
     if not filtered_entities and entities:
