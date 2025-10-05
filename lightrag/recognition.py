@@ -114,6 +114,53 @@ async def recognition_memory_filter(
     return filtered_entities, filtered_relations
 
 
+async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2):
+    """
+    調用 LLM 並在失敗時重試
+
+    Args:
+        client: OpenAI client
+        prompt: LLM prompt
+        max_retries: 最大重試次數
+
+    Returns:
+        提取的 JSON 結果，或 None（失敗）
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            response = await asyncio.to_thread(
+                lambda: client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.0,
+                )
+            )
+            response_text = response.choices[0].message.content
+
+            # 提取 JSON
+            result = extract_json_from_response(response_text)
+
+            if result is not None and isinstance(result, dict):
+                return result
+            else:
+                if attempt < max_retries:
+                    logger.warning(f"Failed to extract JSON, retrying ({attempt + 1}/{max_retries})...")
+                    logger.debug(f"Response was: {response_text[:300]}")
+                else:
+                    logger.warning(f"Failed to extract JSON after {max_retries + 1} attempts")
+                    logger.warning(f"Final response was: {response_text[:300]}")
+
+        except Exception as e:
+            if attempt < max_retries:
+                logger.warning(f"LLM call failed: {e}, retrying ({attempt + 1}/{max_retries})...")
+            else:
+                logger.error(f"LLM call failed after {max_retries + 1} attempts: {e}")
+
+    return None
+
+
 async def _batch_recognize_combined(
     query: str,
     entities: list[dict],
@@ -195,28 +242,16 @@ async def _batch_recognize_combined(
         )
 
         try:
-            # 調用 OpenAI
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.0,
-                )
-            )
-            response_text = response.choices[0].message.content
-            logger.debug(f"Combined filter LLM raw response: {response_text[:500]}")
+            # 調用 OpenAI with retry
+            result = await _call_llm_with_retry(client, prompt, max_retries=2)
 
-            # 提取 JSON
-            result = extract_json_from_response(response_text)
-
-            # 如果提取失敗，保留所有資料
-            if result is None or not isinstance(result, dict):
-                logger.warning(f"Failed to extract JSON from LLM response for batch {i//batch_size + 1}, keeping all items")
-                logger.warning(f"LLM response was: {response_text[:200]}")
+            # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
+            if result is None:
+                logger.warning(f"Failed to get valid response for relation batch {i//batch_size + 1} after retries, keeping all items")
                 filtered_entities.extend(entity_batch)
-                filtered_relations.extend(relation_batch)
+                # 保留所有 relations
+                for rel_id, rel_data in relation_batch_ids.items():
+                    filtered_relations.append(rel_data)
                 continue
 
             # 獲取要移除的 IDs
@@ -249,7 +284,7 @@ async def _batch_recognize_combined(
     orphan_entities = [e for e in entities if e.get("entity_name") not in entities_in_relations]
 
     if orphan_entities:
-        logger.info(f"Processing {len(orphan_entities)} orphan entities (not in any relations)")
+        # logger.info(f"Processing {len(orphan_entities)} orphan entities (not in any relations)")
 
         # 對落單 entities 進行 batch 處理
         for i in range(0, len(orphan_entities), batch_size):
@@ -274,25 +309,12 @@ async def _batch_recognize_combined(
             )
 
             try:
-                # 調用 OpenAI
-                response = await asyncio.to_thread(
-                    lambda: client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.0,
-                    )
-                )
-                response_text = response.choices[0].message.content
-                logger.debug(f"Orphan entities filter LLM raw response: {response_text[:500]}")
+                # 調用 OpenAI with retry
+                result = await _call_llm_with_retry(client, prompt, max_retries=2)
 
-                # 提取 JSON
-                result = extract_json_from_response(response_text)
-
-                # 如果提取失敗，保留所有資料
-                if result is None or not isinstance(result, dict):
-                    logger.warning(f"Failed to extract JSON for orphan batch {i//batch_size + 1}, keeping all items")
+                # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
+                if result is None:
+                    logger.warning(f"Failed to get valid response for orphan batch {i//batch_size + 1} after retries, keeping all items")
                     filtered_entities.extend(orphan_batch)
                     continue
 

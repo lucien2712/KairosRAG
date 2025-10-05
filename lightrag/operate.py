@@ -4535,10 +4535,7 @@ async def _build_query_context(
                     "source_id": e.get("source_id", ""),  # Keep source_id for chunk retrieval
                 })
 
-            logger.info(
-                f"After Recognition Memory: {len(entities_context)} entities, "
-                f"{len(relations_context)} relations"
-            )
+            
 
         # Apply token limits AFTER Recognition Memory filtering
         entities_context = truncate_list_by_token_size(
@@ -4555,7 +4552,7 @@ async def _build_query_context(
             tokenizer=tokenizer,
         )
 
-        logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
+        # logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
 
         # Now retrieve and process chunks based on (potentially filtered) entities and relations
         # This happens regardless of Recognition Memory setting
@@ -5043,10 +5040,7 @@ async def _build_query_context(
                     "source_id": e.get("source_id", ""),
                 })
 
-            logger.info(
-                f"After Recognition Memory: {len(entities_context)} entities, "
-                f"{len(relations_context)} relations"
-            )
+         
 
             # Apply token limits AFTER Recognition Memory filtering (max_hop=0 case)
             entities_context = truncate_list_by_token_size(
@@ -5063,7 +5057,7 @@ async def _build_query_context(
                 tokenizer=tokenizer,
             )
 
-            logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
+            # logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
 
             # Note: text_units_context already generated in else block above
             # No need to regenerate chunks here
