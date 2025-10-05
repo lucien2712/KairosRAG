@@ -3403,6 +3403,7 @@ async def _original_multi_hop_expand(
     all_expanded_relations = []
     current_nodes = seed_nodes.copy()
     visited_nodes = set(node["entity_name"] for node in seed_nodes)
+    visited_relations = set()  # Track visited (src_id, tgt_id) pairs to prevent duplicates and cycles
     
     # BFS expansion for all hops
     for hop in range(1, query_param.max_hop + 1):
@@ -3519,16 +3520,17 @@ async def _original_multi_hop_expand(
         neighbor_candidates = []
         for edge_key, node_neighbor_pairs in edge_to_node_mapping.items():
             edge_data = all_edge_data_dict.get(edge_key)
-            
+
             if edge_data:
                 edge_info = {
                     "src_id": edge_key[0],
                     "tgt_id": edge_key[1],
                     **edge_data
                 }
-                
+
                 for node_name, neighbor_name in node_neighbor_pairs:
                     neighbor_candidates.append({
+                        "seed_node": node_name,  # Track which seed node this neighbor came from
                         "entity_name": neighbor_name,
                         "edge": edge_info
                     })
@@ -3572,35 +3574,55 @@ async def _original_multi_hop_expand(
                     query_hl_embedding
                 )
                 
-                # Apply threshold and build scored neighbors
+                # Apply threshold and build scored neighbors (with seed node tracking)
                 for i, (candidate, node_data, score) in enumerate(zip(candidates_with_node_data, nodes_data_list, scores)):
                     if score >= query_param.multi_hop_relevance_threshold:
-                        scored_neighbors.append((node_data, candidate["edge"], score))
+                        scored_neighbors.append((candidate["seed_node"], node_data, candidate["edge"], score))
                     else:
                         logger.debug(f"Node {candidate['entity_name']} rejected: score {score:.3f} < threshold {query_param.multi_hop_relevance_threshold}")
-                
+
                 # Log performance metrics
                 logger.debug(f"Vectorized scoring completed: {len(scored_neighbors)} qualified out of {len(candidates_with_node_data)} candidates")
-        
+
         logger.info(f"Multi-hop: Hop {hop} found {len(scored_neighbors)} qualified nodes")
-        
-        # Sort by score and select top neighbors
-        scored_neighbors.sort(key=lambda x: x[2], reverse=True)
-        selected = scored_neighbors[:query_param.top_neighbors]
-        
+
+        # Group neighbors by seed node and select top N per seed
+        from collections import defaultdict
+        neighbors_by_seed = defaultdict(list)
+        for seed_node, node_data, edge_data, score in scored_neighbors:
+            neighbors_by_seed[seed_node].append((node_data, edge_data, score))
+
+        # Select top_neighbors for each seed node
+        selected = []
+        for seed_node, neighbors in neighbors_by_seed.items():
+            # Sort by score and select top N for this seed
+            neighbors.sort(key=lambda x: x[2], reverse=True)
+            top_n = neighbors[:query_param.top_neighbors]
+            selected.extend(top_n)
+            logger.debug(f"Seed node '{seed_node}': selected {len(top_n)} neighbors from {len(neighbors)} candidates")
+
+        logger.info(f"Multi-hop: Selected {len(selected)} total neighbors from {len(neighbors_by_seed)} seed nodes (max {query_param.top_neighbors} per seed)")
+
         if not selected:
             logger.debug(f"No relevant neighbors found at hop {hop}, stopping expansion")
             break
         
-        # Add selected neighbors to results
+        # Add selected neighbors to results (with relation deduplication and cycle prevention)
         for node_data, edge_data, score in selected:
-            if node_data["entity_name"] not in visited_nodes:
+            entity_name = node_data["entity_name"]
+
+            # Add entity if not visited
+            if entity_name not in visited_nodes:
                 next_nodes.append(node_data)
                 all_expanded_entities.append(node_data)
-                visited_nodes.add(node_data["entity_name"])
-                
-            hop_relations.append(edge_data)
-        
+                visited_nodes.add(entity_name)
+
+                # Only add relation if target node is new (prevents cycles like A→B→A)
+                edge_key = (edge_data["src_id"], edge_data["tgt_id"])
+                if edge_key not in visited_relations:
+                    hop_relations.append(edge_data)
+                    visited_relations.add(edge_key)
+
         all_expanded_relations.extend(hop_relations)
         current_nodes = next_nodes
         
@@ -4401,21 +4423,8 @@ async def _build_query_context(
                         seen_relations.add(rel_key)
         
         logger.info(f"Multi-hop expansion completed: added {len(expanded_entities)} entities, {len(expanded_relations)} relations")
-        
-        # Reapply token limits after expansion
-        entities_context = truncate_list_by_token_size(
-            entities_context,
-            key=lambda x: json.dumps(x, ensure_ascii=False),
-            max_token_size=max_entity_tokens,
-            tokenizer=tokenizer,
-        )
-        
-        relations_context = truncate_list_by_token_size(
-            relations_context,
-            key=lambda x: json.dumps(x, ensure_ascii=False),
-            max_token_size=max_relation_tokens,
-            tokenizer=tokenizer,
-        )
+
+        # Note: Token limits will be applied AFTER Recognition Memory filtering
 
         # Get source chunks for expanded entities and relations separately
         entity_source_ids = set()
@@ -4530,6 +4539,23 @@ async def _build_query_context(
                 f"After Recognition Memory: {len(entities_context)} entities, "
                 f"{len(relations_context)} relations"
             )
+
+        # Apply token limits AFTER Recognition Memory filtering
+        entities_context = truncate_list_by_token_size(
+            entities_context,
+            key=lambda x: json.dumps(x, ensure_ascii=False),
+            max_token_size=max_entity_tokens,
+            tokenizer=tokenizer,
+        )
+
+        relations_context = truncate_list_by_token_size(
+            relations_context,
+            key=lambda x: json.dumps(x, ensure_ascii=False),
+            max_token_size=max_relation_tokens,
+            tokenizer=tokenizer,
+        )
+
+        logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
 
         # Now retrieve and process chunks based on (potentially filtered) entities and relations
         # This happens regardless of Recognition Memory setting
@@ -5021,6 +5047,23 @@ async def _build_query_context(
                 f"After Recognition Memory: {len(entities_context)} entities, "
                 f"{len(relations_context)} relations"
             )
+
+            # Apply token limits AFTER Recognition Memory filtering (max_hop=0 case)
+            entities_context = truncate_list_by_token_size(
+                entities_context,
+                key=lambda x: json.dumps(x, ensure_ascii=False),
+                max_token_size=max_entity_tokens,
+                tokenizer=tokenizer,
+            )
+
+            relations_context = truncate_list_by_token_size(
+                relations_context,
+                key=lambda x: json.dumps(x, ensure_ascii=False),
+                max_token_size=max_relation_tokens,
+                tokenizer=tokenizer,
+            )
+
+            logger.info(f"After token truncation: {len(entities_context)} entities, {len(relations_context)} relations")
 
             # Note: text_units_context already generated in else block above
             # No need to regenerate chunks here
