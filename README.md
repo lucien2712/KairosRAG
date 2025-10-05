@@ -250,4 +250,4 @@ KairosRAG extends **LightRAG** with:
 ## 🙏 Acknowledgments
 
 KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License).
-We extend it with **time-awareness, three-perspective expansion architecture, adaptive schema induction, and agentic entity management** using rigorous mathematical frameworks.
+We extend it with **time-awareness, three-perspective expansion architecture, adaptive schema induction, and agentic entity management**.
