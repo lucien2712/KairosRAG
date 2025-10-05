@@ -175,6 +175,12 @@ class QueryParam:
     """Number of top FastRP similarity nodes to select for final structural analysis.
     If 0, disables FastRP + PageRank enhanced retrieval entirely."""
 
+    enable_recognition: bool = False
+    """Enable LLM-based recognition memory filtering for entities and relations. Default is False."""
+
+    recognition_batch_size: int = 10
+    """Batch size for LLM recognition memory filtering. Default is 10."""
+
 
 @dataclass
 class StorageNameSpace(ABC):

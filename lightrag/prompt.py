@@ -742,3 +742,350 @@ PROMPTS["entity_type_refinement_user"] = """
 
 Please provide the refined list in strict JSON array format.
 """
+
+PROMPTS["recognition_entity_filter"] = """---Role---
+You are a critical component of a high-stakes question-answering system used by researchers and analysts. Your task is to identify relevant entities from a knowledge graph that will help answer complex queries requiring multi-hop reasoning and comprehensive context.
+
+---Task---
+Given a user query and a list of entities with their descriptions, identify which entities are relevant to answering the query. The query may require connecting multiple pieces of information, so consider both direct and indirect relevance.
+
+---Your Task---
+Identify entities that should be REMOVED because they are irrelevant to the query.
+
+---Removal Criteria---
+Only remove an entity if you have **>95% confidence** that:
+1. The entity has absolutely NO connection to the query topic
+2. The entity would NOT help with any reasoning chain to answer the query
+3. The entity provides NO useful context or background information
+4. Removing this entity will NOT impact the quality or completeness of the answer
+
+---When to KEEP (Do NOT Remove)---
+KEEP an entity if it:
+- Directly answers any aspect of the query
+- Provides context or background that aids understanding
+- Could be part of a multi-hop reasoning path
+- Relates to entities or concepts mentioned in the query
+- Might help answer follow-up questions on the same topic
+- You are uncertain about its relevance (when in doubt, DO NOT remove)
+
+---Critical Guidelines---
+- **Default Action: KEEP** - Only remove entities you are absolutely certain are irrelevant
+- **High Confidence Threshold**: Require >95% confidence before removing
+- **Multi-hop Awareness**: Consider indirect connections through other entities
+- **Impact Assessment**: Missing a relevant entity is far worse than keeping a marginally relevant one
+
+---Examples---
+
+**Example 1:**
+
+Query: "Compare Apple's iPhone revenue performance across 2024 quarters"
+
+Entities:
+[
+  {{
+    "entity_name": "Apple",
+    "description": "Apple is a technology company that reported quarterly earnings, showing mixed performance across product categories."
+  }},
+  {{
+    "entity_name": "iPhone Revenue",
+    "description": "iPhone revenue reached $39.3 billion in Q3 2024, down 1.5% YoY, and $45.9 billion in Q2 2024, up 5% YoY."
+  }},
+  {{
+    "entity_name": "Tim Cook",
+    "description": "Tim Cook is Apple's CEO who presented quarterly earnings results."
+  }},
+  {{
+    "entity_name": "Services Revenue",
+    "description": "Services revenue grew to $24.2 billion, up 14% year-over-year."
+  }},
+  {{
+    "entity_name": "Q3 2024",
+    "description": "Q3 2024 reporting period for Apple's quarterly earnings."
+  }},
+  {{
+    "entity_name": "Q2 2024",
+    "description": "Q2 2024 reporting period for Apple's quarterly earnings."
+  }},
+  {{
+    "entity_name": "iPad",
+    "description": "iPad is a tablet product line manufactured by Apple."
+  }}
+]
+
+Reasoning:
+- "Apple": KEEP - The company being queried
+- "iPhone Revenue": KEEP - Directly answers iPhone revenue question
+- "Tim Cook": KEEP - CEO presented earnings, provides context
+- "Services Revenue": KEEP - Overall performance context for comparison
+- "Q3 2024": KEEP - Quarter being compared
+- "Q2 2024": KEEP - Quarter being compared
+- "iPad": **REMOVE** - >95% confident: different product line, no connection to iPhone revenue query
+
+Output (only list entities to REMOVE):
+{{
+  "irrelevant_entity_ids": ["iPad"]
+}}
+
+**Example 2:**
+
+Query: "What technology does TSMC use for chip manufacturing?"
+
+Entities:
+[
+  {{
+    "entity_name": "TSMC",
+    "description": "Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry."
+  }},
+  {{
+    "entity_name": "3nm Process",
+    "description": "Advanced chip manufacturing process technology using 3-nanometer transistors."
+  }},
+  {{
+    "entity_name": "Apple",
+    "description": "Apple is a major customer of TSMC for chip production."
+  }},
+  {{
+    "entity_name": "EUV Lithography",
+    "description": "Extreme ultraviolet lithography technology used in advanced chip manufacturing."
+  }}
+]
+
+Reasoning:
+- "TSMC": KEEP - Company being queried
+- "3nm Process": KEEP - Manufacturing technology
+- "Apple": KEEP - Major customer, provides context for TSMC's technology applications
+- "EUV Lithography": KEEP - Manufacturing technology
+
+Output (only list entities to REMOVE):
+{{
+  "irrelevant_entity_ids": []
+}}
+
+---Input Format---
+- Query: user's question (string)
+- Entities: JSON array of objects with "entity_name" and "description"
+
+---Output Format---
+You MUST respond with ONLY a valid JSON object listing entities to REMOVE. No markdown code blocks, no explanations, no additional text.
+
+Format:
+{{
+  "irrelevant_entity_ids": ["entity_name_1", "entity_name_2"]
+}}
+
+**CRITICAL**:
+- List ONLY entities you want to REMOVE (not keep)
+- Use EXACT "entity_name" values from the input. Do not modify.
+- Require >95% confidence before removing an entity
+- The accuracy of your removal decisions directly impacts answer quality
+- Incorrectly removing a relevant entity is WORSE than keeping a marginally relevant one
+- Return empty array if ALL entities should be kept: {{"irrelevant_entity_ids": []}}
+- Your response must start with {{ and end with }}
+
+---Query---
+{query}
+
+---Entities---
+{entities_json}
+
+---Your JSON Response---
+"""
+
+PROMPTS["recognition_relation_filter"] = """---Role---
+You are a critical component of a high-stakes question-answering system used by researchers and analysts. Your task is to identify relevant relationships from a knowledge graph that will help answer complex queries requiring multi-hop reasoning and comprehensive context.
+
+---Task---
+Given a user query and a list of relationships, identify which relationships are relevant to answering the query. The query may require connecting multiple pieces of information through relationship chains, so consider both direct and indirect relevance.
+
+---Your Task---
+Identify relationships that should be REMOVED because they are irrelevant to the query.
+
+---Removal Criteria---
+Only remove a relationship if you have **>95% confidence** that:
+1. The relationship has absolutely NO connection to the query topic
+2. The relationship would NOT help with any reasoning chain to answer the query
+3. The relationship provides NO useful connections or context
+4. Removing this relationship will NOT break any reasoning paths or impact answer quality
+
+---When to KEEP (Do NOT Remove)---
+KEEP a relationship if it:
+- Directly answers any aspect of the query
+- Forms part of a reasoning chain to the answer
+- Connects entities relevant to the query
+- Provides context that aids understanding
+- Might help answer follow-up questions on the same topic
+- You are uncertain about its relevance (when in doubt, DO NOT remove)
+
+---Critical Guidelines---
+- **Default Action: KEEP** - Only remove relationships you are absolutely certain are irrelevant
+- **High Confidence Threshold**: Require >95% confidence before removing
+- **Path Preservation**: Consider if removing this relationship breaks important connections
+- **Impact Assessment**: Missing a relevant relationship could break reasoning chains
+
+---Examples---
+
+**Example 1:**
+
+Query: "What is the relationship between Apple and TSMC?"
+
+Relations:
+[
+  {{
+    "id": "rel_0",
+    "src_id": "Apple",
+    "tgt_id": "TSMC",
+    "description": "Apple faces supply chain challenges with key supplier TSMC, impacting product availability."
+  }},
+  {{
+    "id": "rel_1",
+    "src_id": "Apple",
+    "tgt_id": "iPhone Revenue",
+    "description": "Apple reported iPhone revenue of $39.3 billion in Q3 2024."
+  }},
+  {{
+    "id": "rel_2",
+    "src_id": "Tim Cook",
+    "tgt_id": "Apple",
+    "description": "Tim Cook serves as Apple's CEO and presented quarterly earnings results."
+  }},
+  {{
+    "id": "rel_3",
+    "src_id": "TSMC",
+    "tgt_id": "Advanced Chips",
+    "description": "TSMC manufactures advanced chips using 3nm process technology."
+  }},
+  {{
+    "id": "rel_4",
+    "src_id": "Apple",
+    "tgt_id": "Greater China",
+    "description": "Apple maintained strong performance in Greater China with $14.7 billion in revenue."
+  }}
+]
+
+Reasoning:
+- "rel_0" (Apple-TSMC): KEEP - Directly answers the query
+- "rel_1" (Apple-iPhone Revenue): KEEP - Provides Apple business context
+- "rel_2" (Tim Cook-Apple): KEEP - Leadership context
+- "rel_3" (TSMC-Advanced Chips): KEEP - Context about TSMC's operations
+- "rel_4" (Apple-Greater China): KEEP - Apple's market context
+
+Output (only list relationships to REMOVE):
+{{
+  "irrelevant_relation_ids": []
+}}
+
+**Example 2:**
+
+Query: "How did Apple's iPhone revenue change in 2024?"
+
+Relations:
+[
+  {{
+    "id": "rel_0",
+    "src_id": "Apple",
+    "tgt_id": "iPhone Revenue",
+    "description": "Apple reported iPhone revenue of $39.3 billion in Q3 2024, down 1.5% YoY."
+  }},
+  {{
+    "id": "rel_1",
+    "src_id": "iPhone Revenue",
+    "tgt_id": "Q3 2024",
+    "description": "iPhone revenue in Q3 2024 showed declining trend compared to previous year."
+  }},
+  {{
+    "id": "rel_2",
+    "src_id": "iPhone Revenue",
+    "tgt_id": "Q2 2024",
+    "description": "iPhone revenue in Q2 2024 was $45.9 billion, up 5% YoY."
+  }},
+  {{
+    "id": "rel_3",
+    "src_id": "Apple",
+    "tgt_id": "Services Revenue",
+    "description": "Apple's Services division generated $24.2 billion in revenue."
+  }},
+  {{
+    "id": "rel_4",
+    "src_id": "Apple",
+    "tgt_id": "TSMC",
+    "description": "Apple sources chips from TSMC for iPhone production."
+  }}
+]
+
+Reasoning:
+- "rel_0" (Apple-iPhone Revenue): KEEP - Directly relevant to iPhone revenue
+- "rel_1" (iPhone Revenue-Q3 2024): KEEP - Q3 2024 performance data
+- "rel_2" (iPhone Revenue-Q2 2024): KEEP - Q2 2024 performance data
+- "rel_3" (Apple-Services Revenue): KEEP - Overall revenue context
+- "rel_4" (Apple-TSMC): KEEP - Supply chain context
+
+Output (only list relationships to REMOVE):
+{{
+  "irrelevant_relation_ids": []
+}}
+
+**Example 3:**
+
+Query: "Tell me about Taiwan's semiconductor industry"
+
+Relations:
+[
+  {{
+    "id": "rel_0",
+    "src_id": "TSMC",
+    "tgt_id": "Taiwan",
+    "description": "TSMC is Taiwan's largest semiconductor manufacturer and major economic contributor."
+  }},
+  {{
+    "id": "rel_1",
+    "src_id": "UMC",
+    "tgt_id": "Taiwan",
+    "description": "UMC is a major Taiwan-based semiconductor foundry."
+  }},
+  {{
+    "id": "rel_2",
+    "src_id": "TSMC",
+    "tgt_id": "Apple",
+    "description": "TSMC manufactures chips for Apple's iPhone and Mac products."
+  }}
+]
+
+Reasoning:
+- "rel_0" (TSMC-Taiwan): KEEP - Taiwan semiconductor industry
+- "rel_1" (UMC-Taiwan): KEEP - Taiwan semiconductor company
+- "rel_2" (TSMC-Apple): KEEP - Shows Taiwan semiconductor industry's global importance
+
+Output (only list relationships to REMOVE):
+{{
+  "irrelevant_relation_ids": []
+}}
+
+---Input Format---
+- Query: user's question (string)
+- Relations: JSON array of objects with "id", "src_id", "tgt_id", "description"
+
+---Output Format---
+You MUST respond with ONLY a valid JSON object listing relationships to REMOVE. No markdown code blocks, no explanations, no additional text.
+
+Format:
+{{
+  "irrelevant_relation_ids": ["id_1", "id_2"]
+}}
+
+**CRITICAL**:
+- List ONLY relationships you want to REMOVE (not keep)
+- Use EXACT "id" values from the input. Do not modify.
+- Require >95% confidence before removing a relationship
+- The accuracy of your removal decisions directly impacts answer quality
+- Incorrectly removing a relevant relationship could BREAK reasoning chains
+- Return empty array if ALL relationships should be kept: {{"irrelevant_relation_ids": []}}
+- Your response must start with {{ and end with }}
+
+---Query---
+{query}
+
+---Relations---
+{relations_json}
+
+---Your JSON Response---
+"""

@@ -18,7 +18,7 @@ async def main():
         rewritten_query = rewriter(query)
         print("Rewrite query: ", query)
 
-        response = rag.query(
+        response, context = rag.query(
             rewritten_query,
             param=QueryParam(
                 mode="hybrid",

@@ -3998,6 +3998,7 @@ async def _build_query_context(
                 "description": n.get("description", "UNKNOWN"),
                 "created_at": created_at,
                 "file_path": file_path,
+                "source_id": n.get("source_id", ""),  # For chunk retrieval
             }
         )
 
@@ -4026,6 +4027,7 @@ async def _build_query_context(
                 "description": e.get("description", "UNKNOWN"),
                 "created_at": created_at,
                 "file_path": file_path,
+                "source_id": e.get("source_id", ""),  # For chunk retrieval
             }
         )
 
@@ -4305,7 +4307,7 @@ async def _build_query_context(
             query_param=query_param,
             global_config=global_config,
         )
-        
+
         # Merge expanded results with existing context using round-robin
         if expanded_entities:
             # Create context format for expanded entities
@@ -4324,6 +4326,7 @@ async def _build_query_context(
                     "description": n.get("description", "UNKNOWN"),
                     "created_at": created_at,
                     "file_path": file_path,
+                    "source_id": n.get("source_id", ""),  # For chunk retrieval
                 })
             
             # Round-robin merge initial and expanded entities
@@ -4371,6 +4374,7 @@ async def _build_query_context(
                     "description": e.get("description", "UNKNOWN"),
                     "created_at": created_at,
                     "file_path": file_path,
+                    "source_id": e.get("source_id", ""),  # For chunk retrieval
                 })
             
             # Round-robin merge initial and expanded relations
@@ -4460,20 +4464,128 @@ async def _build_query_context(
                         "source": "expanded_relation"
                     })
             
-        # Combine initial and expanded chunks, then re-sort using original sorting logic
-        # Combine entity chunks: initial + expanded, then re-sort
-        combined_entity_chunks = initial_chunks["entity_chunks"] + expanded_entity_chunks
-        
-        # Combine relation chunks: initial + expanded, then re-sort  
-        combined_relation_chunks = initial_chunks["relation_chunks"] + expanded_relation_chunks
-        
-        # Use unified chunk processing: merge all chunks, deduplicate, sort by occurrence count,
-        # then select by vector similarity for global optimization
-        logger.debug(f"Starting unified chunk processing: {len(combined_entity_chunks)} entity + {len(combined_relation_chunks)} relation chunks")
+        logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations")
 
-        all_selected_chunks = await _process_all_chunks_unified(
-            entity_chunks=combined_entity_chunks,
-            relation_chunks=combined_relation_chunks,
+        # Recognition Memory filtering (applied BEFORE chunk retrieval)
+        if query_param.enable_recognition and (entities_context or relations_context):
+            from lightrag.recognition import recognition_memory_filter
+
+            # Convert context format to entity/relation format for filtering
+            entities_for_filtering = []
+            for entity in entities_context:
+                entities_for_filtering.append({
+                    "entity_name": entity.get("entity"),
+                    "entity_type": entity.get("type"),
+                    "description": entity.get("description"),
+                    "created_at": entity.get("created_at"),
+                    "file_path": entity.get("file_path"),
+                    "source_id": entity.get("source_id", ""),  # Preserve source_id
+                })
+
+            relations_for_filtering = []
+            for relation in relations_context:
+                relations_for_filtering.append({
+                    "src_id": relation.get("entity1"),
+                    "tgt_id": relation.get("entity2"),
+                    "description": relation.get("description"),
+                    "created_at": relation.get("created_at"),
+                    "file_path": relation.get("file_path"),
+                    "source_id": relation.get("source_id", ""),  # Preserve source_id
+                })
+
+            # Use OpenAI to filter
+            filtered_entities, filtered_relations = await recognition_memory_filter(
+                query=query,
+                entities=entities_for_filtering,
+                relations=relations_for_filtering,
+                batch_size=query_param.recognition_batch_size,
+            )
+
+            # Rebuild context with filtered data
+            entities_context = []
+            for i, n in enumerate(filtered_entities):
+                entities_context.append({
+                    "id": i + 1,
+                    "entity": n.get("entity_name"),
+                    "type": n.get("entity_type", "UNKNOWN"),
+                    "description": n.get("description", "UNKNOWN"),
+                    "created_at": n.get("created_at", "UNKNOWN"),
+                    "file_path": n.get("file_path", "unknown_source"),
+                    "source_id": n.get("source_id", ""),  # Keep source_id for chunk retrieval
+                })
+
+            relations_context = []
+            for i, e in enumerate(filtered_relations):
+                relations_context.append({
+                    "id": i + 1,
+                    "entity1": e.get("src_id"),
+                    "entity2": e.get("tgt_id"),
+                    "description": e.get("description", "UNKNOWN"),
+                    "created_at": e.get("created_at", "UNKNOWN"),
+                    "file_path": e.get("file_path", "unknown_source"),
+                    "source_id": e.get("source_id", ""),  # Keep source_id for chunk retrieval
+                })
+
+            logger.info(
+                f"After Recognition Memory: {len(entities_context)} entities, "
+                f"{len(relations_context)} relations"
+            )
+
+        # Now retrieve and process chunks based on (potentially filtered) entities and relations
+        # This happens regardless of Recognition Memory setting
+        # Extract source_ids from current entities_context and relations_context
+        filtered_entity_source_ids = set()
+        for entity in entities_context:
+            source_id = entity.get("source_id", "")
+            if source_id:
+                if GRAPH_FIELD_SEP in source_id:
+                    filtered_entity_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                else:
+                    filtered_entity_source_ids.add(source_id)
+
+        filtered_relation_source_ids = set()
+        for relation in relations_context:
+            source_id = relation.get("source_id", "")
+            if source_id:
+                if GRAPH_FIELD_SEP in source_id:
+                    filtered_relation_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                else:
+                    filtered_relation_source_ids.add(source_id)
+
+        # Retrieve entity chunks for filtered entities
+        filtered_entity_chunks = []
+        if filtered_entity_source_ids:
+            for source_id in filtered_entity_source_ids:
+                chunk_data = await text_chunks_db.get_by_id(source_id)
+                if chunk_data:
+                    filtered_entity_chunks.append({
+                        "content": chunk_data["content"],
+                        "file_path": chunk_data.get("file_path", "unknown_source"),
+                        "timestamp": chunk_data.get("timestamp", ""),
+                        "chunk_id": source_id,
+                        "source": "entity"
+                    })
+
+        # Retrieve relation chunks for filtered relations
+        filtered_relation_chunks = []
+        if filtered_relation_source_ids:
+            for source_id in filtered_relation_source_ids:
+                chunk_data = await text_chunks_db.get_by_id(source_id)
+                if chunk_data:
+                    filtered_relation_chunks.append({
+                        "content": chunk_data["content"],
+                        "file_path": chunk_data.get("file_path", "unknown_source"),
+                        "timestamp": chunk_data.get("timestamp", ""),
+                        "chunk_id": source_id,
+                        "source": "relation"
+                    })
+
+        # Use unified chunk processing on filtered chunks
+        logger.debug(f"Starting unified chunk processing: {len(filtered_entity_chunks)} entity + {len(filtered_relation_chunks)} relation chunks")
+
+        final_chunks_from_kg = await _process_all_chunks_unified(
+            entity_chunks=filtered_entity_chunks,
+            relation_chunks=filtered_relation_chunks,
             entities_context=entities_context,
             relations_context=relations_context,
             query=query,
@@ -4483,9 +4595,6 @@ async def _build_query_context(
             query_embedding=query_embedding,
         )
 
-        logger.info(f"After expansion: {len(entities_context)} entities, {len(relations_context)} relations")
-        logger.info(f"Unified chunk selection: {len(all_selected_chunks)} total chunks selected")
-        
         # Prepare final chunks for round-robin merge
         # Vector chunks from initial search (if any)
         final_vector_chunks = []
@@ -4498,15 +4607,15 @@ async def _build_query_context(
                 "source": "vector",
             })
 
-        # Unified selected chunks (already processed and optimized)
+        # Chunks from (potentially filtered) entities and relations
         final_unified_chunks = []
-        for chunk in all_selected_chunks:
+        for chunk in final_chunks_from_kg:
             final_unified_chunks.append({
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
-                "chunk_id": chunk.get("chunk_id") or chunk.get("id"),
+                "chunk_id": chunk.get("chunk_id"),
                 "timestamp": chunk.get("timestamp", ""),
-                "source": chunk.get("source", "unified"),  # Preserve original source if available
+                "source": "kg",  # From knowledge graph entities/relations
             })
         
         # Apply round-robin merge with deduplication between vector and unified chunks
@@ -4842,8 +4951,85 @@ async def _build_query_context(
                 
                 if chunk_tracking_log:
                     logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
-        
-        logger.info(f"Final processed context: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
+
+        # Recognition Memory filtering (when multi-hop is disabled)
+        if query_param.enable_recognition and (entities_context or relations_context):
+            from lightrag.recognition import recognition_memory_filter
+
+            logger.info(
+                f"Recognition Memory: filtering {len(entities_context)} entities, "
+                f"{len(relations_context)} relations (before filtering)"
+            )
+
+            # Convert context format to entity/relation format for filtering
+            entities_for_filtering = []
+            for entity in entities_context:
+                entities_for_filtering.append({
+                    "entity_name": entity.get("entity"),
+                    "entity_type": entity.get("type"),
+                    "description": entity.get("description"),
+                    "created_at": entity.get("created_at"),
+                    "file_path": entity.get("file_path"),
+                    "source_id": entity.get("source_id", ""),
+                })
+
+            relations_for_filtering = []
+            for relation in relations_context:
+                relations_for_filtering.append({
+                    "src_id": relation.get("entity1"),
+                    "tgt_id": relation.get("entity2"),
+                    "description": relation.get("description"),
+                    "created_at": relation.get("created_at"),
+                    "file_path": relation.get("file_path"),
+                    "source_id": relation.get("source_id", ""),
+                })
+
+            # Use OpenAI to filter
+            filtered_entities, filtered_relations = await recognition_memory_filter(
+                query=query,
+                entities=entities_for_filtering,
+                relations=relations_for_filtering,
+                batch_size=query_param.recognition_batch_size,
+            )
+
+            # Rebuild context with filtered data
+            entities_context = []
+            for i, n in enumerate(filtered_entities):
+                entities_context.append({
+                    "id": i + 1,
+                    "entity": n.get("entity_name"),
+                    "type": n.get("entity_type", "UNKNOWN"),
+                    "description": n.get("description", "UNKNOWN"),
+                    "created_at": n.get("created_at", "UNKNOWN"),
+                    "file_path": n.get("file_path", "unknown_source"),
+                    "source_id": n.get("source_id", ""),
+                })
+
+            relations_context = []
+            for i, e in enumerate(filtered_relations):
+                relations_context.append({
+                    "id": i + 1,
+                    "entity1": e.get("src_id"),
+                    "entity2": e.get("tgt_id"),
+                    "description": e.get("description", "UNKNOWN"),
+                    "created_at": e.get("created_at", "UNKNOWN"),
+                    "file_path": e.get("file_path", "unknown_source"),
+                    "source_id": e.get("source_id", ""),
+                })
+
+            logger.info(
+                f"After Recognition Memory: {len(entities_context)} entities, "
+                f"{len(relations_context)} relations"
+            )
+
+            # Note: text_units_context already generated in else block above
+            # No need to regenerate chunks here
+
+        # Final processed context log
+        logger.info(
+            f"Final processed context: {len(entities_context)} entities, "
+            f"{len(relations_context)} relations, {len(text_units_context)} chunks"
+        )
 
     # Re-assign IDs after merging expanded data and potential enhancement
         for i, entity in enumerate(entities_context):
