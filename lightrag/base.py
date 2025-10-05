@@ -165,8 +165,13 @@ class QueryParam:
     top_neighbors: int = 10
     """Maximum number of neighbors to select per hop during multi-hop expansion."""
 
-    multi_hop_relevance_threshold: float = 0.3
-    """Relevance threshold for multi-hop retrieval. Neighbors with scores below this threshold will be filtered out."""
+    multi_hop_relevance_threshold: float = 0.2
+    """Relevance threshold for multi-hop retrieval. Neighbors with scores below this threshold will be filtered out.
+    Recommended ranges:
+    - 0.05-0.1: Broad exploration (discovers more indirect relationships)
+    - 0.1-0.2: Balanced approach (moderate filtering)
+    - 0.3-0.5: Strict filtering (only highly relevant neighbors)
+    """
     
     top_ppr_nodes: int = 50
     """Number of top PageRank nodes to consider as candidates for structural analysis."""
