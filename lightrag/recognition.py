@@ -81,7 +81,7 @@ async def recognition_memory_filter(
     batch_size: int = 10,
 ) -> tuple[list[dict], list[dict]]:
     """
-    使用 LLM 過濾 entities/relations，完整保留原始數據
+    使用 LLM 過濾 entities/relations（一起處理以保持上下文），完整保留原始數據
 
     Args:
         query: 用戶查詢
@@ -96,39 +96,10 @@ async def recognition_memory_filter(
     if not entities and not relations:
         return [], []
 
-    # 並行處理 entities 和 relations
-    tasks = []
-    if entities:
-        tasks.append(_batch_recognize_entities(query, entities, batch_size))
-    if relations:
-        tasks.append(_batch_recognize_relations(query, relations, batch_size))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    # 處理結果，檢查是否有異常
-    filtered_entities = []
-    filtered_relations = []
-
-    if entities:
-        result = results[0] if len(results) > 0 else []
-        if isinstance(result, Exception):
-            logger.error(f"Entity filtering failed: {type(result).__name__}: {result}")
-            import traceback
-            logger.error(f"Traceback: {''.join(traceback.format_exception(type(result), result, result.__traceback__))}")
-            filtered_entities = entities  # Fallback: 使用原始數據
-        else:
-            filtered_entities = result
-
-    if relations:
-        idx = 1 if entities else 0
-        result = results[idx] if len(results) > idx else []
-        if isinstance(result, Exception):
-            logger.error(f"Relation filtering failed: {type(result).__name__}: {result}")
-            import traceback
-            logger.error(f"Traceback: {''.join(traceback.format_exception(type(result), result, result.__traceback__))}")
-            filtered_relations = relations  # Fallback: 使用原始數據
-        else:
-            filtered_relations = result
+    # 一起處理 entities 和 relations（而非並行分開處理）
+    filtered_entities, filtered_relations = await _batch_recognize_combined(
+        query, entities, relations, batch_size
+    )
 
     # 統計日誌
     entity_filter_rate = (1 - len(filtered_entities) / len(entities)) * 100 if entities else 0
@@ -143,119 +114,66 @@ async def recognition_memory_filter(
     return filtered_entities, filtered_relations
 
 
-async def _batch_recognize_entities(
+async def _batch_recognize_combined(
     query: str,
     entities: list[dict],
+    relations: list[dict],
     batch_size: int,
-) -> list[dict]:
-    """批次過濾實體，完整保留原始數據"""
-    if not entities:
-        return []
+) -> tuple[list[dict], list[dict]]:
+    """
+    一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
+    """
+    client = OpenAI()
 
-    filtered = []
+    # 為 relations 創建 ID 映射（完整保留原始 dict）
+    id_mapping = {}
+    for i, rel in enumerate(relations):
+        # 生成唯一 ID
+        rel_id = f"rel_{i}"
+        id_mapping[rel_id] = rel
 
-    for i in range(0, len(entities), batch_size):
-        batch = entities[i:i+batch_size]
+    filtered_entities = []
+    filtered_relations = []
 
-        # 構建 LLM 輸入 JSON（只發送實體資訊，query 分開傳遞）
+    # 批次處理（但現在 entities 和 relations 一起處理）
+    total_items = max(len(entities), len(relations))
+    for i in range(0, total_items, batch_size):
+        entity_batch = entities[i : i + batch_size] if entities else []
+        relation_batch_items = list(id_mapping.items())[i : i + batch_size] if relations else []
+        relation_batch = [rel_data for _, rel_data in relation_batch_items]
+        relation_batch_ids = {rel_id: rel_data for rel_id, rel_data in relation_batch_items}
+
+        # 構建 entities JSON
         entities_data = [
             {
                 "entity_name": e.get("entity_name"),
                 "description": e.get("description", "")
             }
-            for e in batch
+            for e in entity_batch
+        ]
+
+        # 構建 relations JSON
+        relations_data = [
+            {
+                "id": rel_id,
+                "src_id": rel_data.get("src_id"),
+                "tgt_id": rel_data.get("tgt_id"),
+                "description": rel_data.get("description", "")
+            }
+            for rel_id, rel_data in relation_batch_ids.items()
         ]
 
         entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
-        prompt = PROMPTS["recognition_entity_filter"].format(
-            query=query,
-            entities_json=entities_json
-        )
-
-        try:
-            # 調用 OpenAI (不使用 response_format，而是透過 prompt 要求 JSON)
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.0,
-                )
-            )
-            response_text = response.choices[0].message.content
-            logger.debug(f"Entity filter LLM raw response: {response_text[:500]}")
-
-            # 使用專門的 JSON 提取函數
-            result = extract_json_from_response(response_text)
-
-            # 如果提取失敗，保留所有實體作為 fallback
-            if result is None or not isinstance(result, dict):
-                logger.warning(f"Failed to extract JSON from LLM response for batch {i//batch_size + 1}, keeping all entities")
-                logger.warning(f"LLM response was: {response_text[:200]}")
-                filtered.extend(batch)
-                continue
-
-            # 獲取要移除的實體 IDs（新格式）
-            removed_ids = set(result.get("irrelevant_entity_ids", []))
-
-            # 保留所有不在移除列表中的實體（完整保留原始 dict）
-            for entity in batch:
-                if entity.get("entity_name") not in removed_ids:
-                    filtered.append(entity)  # 完整保留原始 dict
-
-        except Exception as e:
-            logger.warning(
-                f"Recognition entity filter failed for batch {i//batch_size + 1}: {e}. "
-                f"Keeping all {len(batch)} entities in this batch."
-            )
-            filtered.extend(batch)  # Fallback: 保留所有
-
-    # Fallback: 如果全部被過濾，保留 top-3
-    if not filtered and entities:
-        logger.warning("Recognition filtered all entities, keeping top 3 as fallback")
-        filtered = entities[:3]
-
-    return filtered
-
-
-async def _batch_recognize_relations(
-    query: str,
-    relations: list[dict],
-    batch_size: int,
-) -> list[dict]:
-    """批次過濾關係，完整保留原始數據"""
-    if not relations:
-        return []
-
-    filtered = []
-
-    for i in range(0, len(relations), batch_size):
-        batch = relations[i:i+batch_size]
-
-        # 為每個 relation 生成臨時 ID（用於 LLM 回傳）
-        id_mapping = {}
-        relations_data = []
-
-        for idx, r in enumerate(batch):
-            rel_id = f"rel_{i+idx}"
-            id_mapping[rel_id] = r  # 儲存 ID 到原始數據的映射
-
-            relations_data.append({
-                "id": rel_id,
-                "src_id": r.get("src_id", ""),
-                "tgt_id": r.get("tgt_id", ""),
-                "description": r.get("description", "")
-            })
-
         relations_json = json.dumps(relations_data, ensure_ascii=False, indent=2)
-        prompt = PROMPTS["recognition_relation_filter"].format(
+
+        prompt = PROMPTS["recognition_combined_filter"].format(
             query=query,
+            entities_json=entities_json,
             relations_json=relations_json
         )
 
         try:
-            # 調用 OpenAI (不使用 response_format，而是透過 prompt 要求 JSON)
+            # 調用 OpenAI
             response = await asyncio.to_thread(
                 lambda: client.chat.completions.create(
                     model="gpt-4o-mini",
@@ -266,36 +184,50 @@ async def _batch_recognize_relations(
                 )
             )
             response_text = response.choices[0].message.content
-            logger.debug(f"Relation filter LLM raw response: {response_text[:500]}")
+            logger.debug(f"Combined filter LLM raw response: {response_text[:500]}")
 
-            # 使用專門的 JSON 提取函數
+            # 提取 JSON
             result = extract_json_from_response(response_text)
 
-            # 如果提取失敗，保留所有關係作為 fallback
+            # 如果提取失敗，保留所有資料
             if result is None or not isinstance(result, dict):
-                logger.warning(f"Failed to extract JSON from LLM response for batch {i//batch_size + 1}, keeping all relations")
+                logger.warning(f"Failed to extract JSON from LLM response for batch {i//batch_size + 1}, keeping all items")
                 logger.warning(f"LLM response was: {response_text[:200]}")
-                filtered.extend(batch)
+                filtered_entities.extend(entity_batch)
+                filtered_relations.extend(relation_batch)
                 continue
 
-            # 獲取要移除的關係 IDs（新格式）
-            removed_ids = set(result.get("irrelevant_relation_ids", []))
+            # 獲取要移除的 IDs
+            removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
+            removed_relation_ids = set(result.get("irrelevant_relation_ids", []))
 
-            # 保留所有不在移除列表中的關係（完整保留原始 dict）
-            for rel_id, rel_data in id_mapping.items():
-                if rel_id not in removed_ids:
-                    filtered.append(rel_data)  # 完整保留原始 dict
+            # 保留所有不在移除列表中的 entities
+            for entity in entity_batch:
+                if entity.get("entity_name") not in removed_entity_ids:
+                    filtered_entities.append(entity)
+
+            # 保留所有不在移除列表中的 relations
+            for rel_id, rel_data in relation_batch_ids.items():
+                if rel_id not in removed_relation_ids:
+                    filtered_relations.append(rel_data)
 
         except Exception as e:
             logger.warning(
-                f"Recognition relation filter failed for batch {i//batch_size + 1}: {e}. "
-                f"Keeping all {len(batch)} relations in this batch."
+                f"Recognition combined filter failed for batch {i//batch_size + 1}: {e}. "
+                f"Keeping all {len(entity_batch)} entities and {len(relation_batch)} relations in this batch."
             )
-            filtered.extend(batch)  # Fallback: 保留所有
+            filtered_entities.extend(entity_batch)
+            filtered_relations.extend(relation_batch)
 
     # Fallback: 如果全部被過濾，保留 top-3
-    if not filtered and relations:
-        logger.warning("Recognition filtered all relations, keeping top 3 as fallback")
-        filtered = relations[:3]
+    if not filtered_entities and entities:
+        logger.warning("Recognition filtered all entities, keeping top 3 as fallback")
+        filtered_entities = entities[:3]
 
-    return filtered
+    if not filtered_relations and relations:
+        logger.warning("Recognition filtered all relations, keeping top 3 as fallback")
+        filtered_relations = relations[:3]
+
+    return filtered_entities, filtered_relations
+
+
