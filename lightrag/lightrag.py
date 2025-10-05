@@ -2127,7 +2127,7 @@ class LightRAG:
         query: str,
         param: QueryParam = QueryParam(),
         system_prompt: str | None = None,
-    ) -> str | AsyncIterator[str]:
+    ):
         """
         Perform a async query.
 
@@ -2146,7 +2146,7 @@ class LightRAG:
             global_config["node_embedding"] = self.node_embedding
 
         if param.mode in ["local", "global", "hybrid", "mix"]:
-            response = await kg_query(
+            response, context = await kg_query(
                 query.strip(),
                 self.chunk_entity_relation_graph,
                 self.entities_vdb,
@@ -2183,7 +2183,7 @@ class LightRAG:
         else:
             raise ValueError(f"Unknown mode {param.mode}")
         await self._query_done()
-        return response #, context
+        return response, context
 
     async def _query_done(self):
         await self.llm_response_cache.index_done_callback()
@@ -3571,7 +3571,7 @@ class LightRAG:
 
             # Step 2: Get documents to process (priority: texts > input_folder > chunks_db)
             if texts is not None:
-                file_text_pairs = self._process_texts(texts)
+                file_text_pairs = self._process_texts(texts, force_refresh)
             elif input_folder:
                 file_text_pairs = self._process_files_from_folder(input_folder, force_refresh)
             else:
@@ -3737,17 +3737,20 @@ class LightRAG:
             status[file_name] = True
         self._save_processing_status(status)
 
-    def _process_texts(self, texts: Union[str, list[str]]) -> list:
+    def _process_texts(self, texts: Union[str, list[str]], force_refresh: bool = False) -> list:
         """Process text content directly without file I/O.
 
         Args:
             texts: String or list of strings to analyze.
+            force_refresh: Whether to reprocess already-processed texts.
 
         Returns:
             list: List of (identifier, text_content) tuples.
         """
         import hashlib
 
+        # Load processing status to check for already-processed content
+        processed_texts = self._load_processing_status() if not force_refresh else {}
         file_text_pairs = []
 
         # Convert single string to list for uniform processing
@@ -3759,12 +3762,18 @@ class LightRAG:
                 # Use content hash as identifier for deduplication
                 content_hash = hashlib.md5(text_content.encode('utf-8')).hexdigest()[:16]
                 identifier = f"text_{idx+1}_{content_hash}"
+
+                # Check if this content hash was already processed
+                if not force_refresh and identifier in processed_texts:
+                    logger.debug(f"Skipped: {identifier} (already processed)")
+                    continue
+
                 file_text_pairs.append((identifier, text_content))
                 logger.info(f"Added text content: {identifier}")
             else:
                 logger.warning(f"Skipped empty text at index {idx}")
 
-        logger.info(f"Selected {len(file_text_pairs)} text items for processing")
+        logger.info(f"Selected {len(file_text_pairs)} text items for processing (skipped {len(texts) - len(file_text_pairs)} already-processed)")
         return file_text_pairs
 
     def _process_files_from_folder(self, folder_path: str, force_refresh: bool = False) -> list:

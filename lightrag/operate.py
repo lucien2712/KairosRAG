@@ -2274,9 +2274,9 @@ async def kg_query(
     hashing_kv: BaseKVStorage | None = None,
     system_prompt: str | None = None,
     chunks_vdb: BaseVectorStorage = None,
-) -> str | AsyncIterator[str]:
+) -> tuple[str, str] | tuple[AsyncIterator[str], str]:
     if not query:
-        return PROMPTS["fail_response"]
+        return PROMPTS["fail_response"], ""
 
     if query_param.model_func:
         use_model_func = query_param.model_func
@@ -2304,7 +2304,7 @@ async def kg_query(
         hashing_kv, args_hash, query, query_param.mode, cache_type="query"
     )
     if cached_response is not None:
-        return cached_response
+        return cached_response, ""
 
     hl_keywords, ll_keywords = await get_keywords_from_query(
         query, query_param, global_config, hashing_kv
@@ -2323,7 +2323,7 @@ async def kg_query(
             logger.warning(f"Forced low_level_keywords to origin query: {query}")
             ll_keywords = [query]
         else:
-            return PROMPTS["fail_response"]
+            return PROMPTS["fail_response"], ""
 
     ll_keywords_str = ", ".join(ll_keywords) if ll_keywords else ""
     hl_keywords_str = ", ".join(hl_keywords) if hl_keywords else ""
@@ -2343,9 +2343,9 @@ async def kg_query(
     )
 
     if query_param.only_need_context:
-        return context if context is not None else PROMPTS["fail_response"]
+        return (context if context is not None else PROMPTS["fail_response"]), ""
     if context is None:
-        return PROMPTS["fail_response"]
+        return PROMPTS["fail_response"], ""
 
     # Process conversation history
     history_context = ""
@@ -2369,7 +2369,7 @@ async def kg_query(
     )
 
     if query_param.only_need_prompt:
-        return sys_prompt
+        return sys_prompt, context
 
     tokenizer: Tokenizer = global_config["tokenizer"]
     len_of_prompts = len(tokenizer.encode(query + sys_prompt))
@@ -2420,7 +2420,7 @@ async def kg_query(
             ),
         )
 
-    return response #,context
+    return response, context
 
 
 # Multi-hop retrieval functions
