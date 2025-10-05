@@ -149,8 +149,6 @@ where $q$ = user query, $e_i$ = entity/relation
 
 $$E_{filtered} = \{e_i \in E_{retrieved} | R(e_i) = \text{False}\}$$
 
-**Typical Retention Rate:** 85-95% of retrieved entities/relations
-
 ### 📊 **Table-Aware Document Processing**
 
 * **Problem**: HTML tables in documents get fragmented during traditional chunking, causing loss of structural relationships and data integrity that are crucial for understanding financial reports, research papers, and structured documents.
