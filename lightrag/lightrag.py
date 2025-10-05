@@ -3070,12 +3070,12 @@ class LightRAG:
                 print(f"Failed to load entity pair cache: {e}")
                 entity_pair_cache = {}
         
-        # Initialize LLM (you may need to adjust this based on your setup)
+        # Initialize LLM using self.llm_model_name
         llm = ChatOpenAI(
-            model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+            model=self.llm_model_name,
             api_key=os.getenv("OPENAI_API_KEY"),
         )
-        print(f"LLM initialized: {os.getenv('LLM_MODEL', 'gpt-4o-mini')}")
+        print(f"LLM initialized: {self.llm_model_name}")
         
         # Define the merge tool for LLM
         @tool
@@ -3903,7 +3903,7 @@ class LightRAG:
             )
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=self.llm_model_name,
                 messages=[
                     {
                         "role": "system",
@@ -3936,7 +3936,7 @@ class LightRAG:
             client = self._create_openai_client()
             
             response = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=self.llm_model_name,
                 messages=[
                     {
                         "role": "system",

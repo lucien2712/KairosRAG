@@ -79,6 +79,7 @@ async def recognition_memory_filter(
     relations: list[dict],
     llm_model_func=None,  # 不再需要，保留參數為了向後兼容
     batch_size: int = 10,
+    llm_model_name: str = "gpt-4o-mini",  # 新增參數
 ) -> tuple[list[dict], list[dict]]:
     """
     使用 LLM 過濾 entities/relations（一起處理以保持上下文），完整保留原始數據
@@ -89,6 +90,7 @@ async def recognition_memory_filter(
         relations: 3-perspective 檢索到的所有關係
         llm_model_func: LLM 模型函數（使用現有的）
         batch_size: 批次大小
+        llm_model_name: LLM 模型名稱
 
     Returns:
         (filtered_entities, filtered_relations) - 完整保留所有欄位
@@ -98,7 +100,7 @@ async def recognition_memory_filter(
 
     # 一起處理 entities 和 relations（而非並行分開處理）
     filtered_entities, filtered_relations = await _batch_recognize_combined(
-        query, entities, relations, batch_size
+        query, entities, relations, batch_size, llm_model_name
     )
 
     # 統計日誌
@@ -114,7 +116,7 @@ async def recognition_memory_filter(
     return filtered_entities, filtered_relations
 
 
-async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2):
+async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, llm_model_name: str = "gpt-4o-mini"):
     """
     調用 LLM 並在失敗時重試
 
@@ -122,6 +124,7 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2):
         client: OpenAI client
         prompt: LLM prompt
         max_retries: 最大重試次數
+        llm_model_name: LLM 模型名稱
 
     Returns:
         提取的 JSON 結果，或 None（失敗）
@@ -130,7 +133,7 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2):
         try:
             response = await asyncio.to_thread(
                 lambda: client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model=llm_model_name,
                     messages=[
                         {"role": "user", "content": prompt}
                     ],
@@ -166,6 +169,7 @@ async def _batch_recognize_combined(
     entities: list[dict],
     relations: list[dict],
     batch_size: int,
+    llm_model_name: str = "gpt-4o-mini",
 ) -> tuple[list[dict], list[dict]]:
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
@@ -243,7 +247,7 @@ async def _batch_recognize_combined(
 
         try:
             # 調用 OpenAI with retry
-            result = await _call_llm_with_retry(client, prompt, max_retries=2)
+            result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
 
             # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
             if result is None:
@@ -310,7 +314,7 @@ async def _batch_recognize_combined(
 
             try:
                 # 調用 OpenAI with retry
-                result = await _call_llm_with_retry(client, prompt, max_retries=2)
+                result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
 
                 # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
                 if result is None:
