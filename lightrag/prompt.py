@@ -282,14 +282,6 @@ Your task is to synthesize a list of descriptions of a given entity or relation 
    - **If descriptions contain timestamp prefixes** (e.g., "[Time: Fiscal Year 2024-Q1]", "[Time: Fiscal Year 2024-Q3]", "[Time: 2024-07]"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
    - **If descriptions do NOT contain timestamp prefixes**, synthesize the information naturally without adding or inventing temporal markers.
 
-**Example with timestamps:**
-Input descriptions:
-- "[Time: Fiscal Year 2024-Q1] Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
-- "[Time: Fiscal Year 2024-Q3] Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
-
-Required output format:
-"Apple technology company shows mixed quarterly performance. [Time: Fiscal Year 2024-Q1] Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. [Time: Fiscal Year 2024-Q3] Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
-
 **Example without timestamps:**
 Input descriptions:
 - "Apple is a technology company headquartered in Cupertino, California"
@@ -299,6 +291,15 @@ Required output format:
 "Apple is a technology company headquartered in Cupertino, California that designs and manufactures consumer electronics, software, and online services."
 
 DO NOT add timestamp prefixes like "[Time: ...]" when they are not present in the original descriptions.
+
+**Example with timestamps:**
+Input descriptions:
+- "[Time: Fiscal Year 2024-Q1] Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
+- "[Time: Fiscal Year 2024-Q3] Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
+
+Required output format:
+"Apple technology company shows mixed quarterly performance. [Time: Fiscal Year 2024-Q1] Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. [Time: Fiscal Year 2024-Q3] Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
+
 4. **Conflict Resolution:** In case of conflicting or inconsistent descriptions from different time periods, prioritize more recent information while preserving historical context. If conflicts arise from distinct entities sharing the same name, treat them separately. When temporal information conflicts (e.g., same quarter with different data), note the discrepancy explicitly.
 5. **Relevance Filtering:** Focus on substantive information. Remove redundant phrases while preserving unique details from each description.
 6. **Style:** The output must be written from an objective, third-person perspective.
@@ -743,10 +744,10 @@ PROMPTS["entity_type_refinement_user"] = """
 Please provide the refined list in strict JSON array format.
 """
 
-# Legacy single-filter prompts removed - now using recognition_combined_filter
+# Legacy single-filter prompts removed - now using recognition_filter
 
 
-PROMPTS["recognition_combined_filter"] = """---Role---
+PROMPTS["recognition_filter"] = """---Role---
 You are a critical component of a high-stakes question-answering system used by researchers and analysts. Your task is to identify entities and relationships that should be REMOVED because they are irrelevant to the query.
 
 ---Task---
