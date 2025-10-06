@@ -80,6 +80,7 @@ async def recognition_memory_filter(
     llm_model_func=None,  # 不再需要，保留參數為了向後兼容
     batch_size: int = 10,
     llm_model_name: str = "gpt-4o-mini",  # 新增參數
+    global_config: dict = None,  # 新增參數：用於獲取 llm_model_max_async
 ) -> tuple[list[dict], list[dict]]:
     """
     使用 LLM 過濾 entities/relations（一起處理以保持上下文），完整保留原始數據
@@ -91,6 +92,7 @@ async def recognition_memory_filter(
         llm_model_func: LLM 模型函數（使用現有的）
         batch_size: 批次大小
         llm_model_name: LLM 模型名稱
+        global_config: 全局配置字典，用於獲取 llm_model_max_async
 
     Returns:
         (filtered_entities, filtered_relations) - 完整保留所有欄位
@@ -100,7 +102,7 @@ async def recognition_memory_filter(
 
     # 一起處理 entities 和 relations（而非並行分開處理）
     filtered_entities, filtered_relations = await _batch_recognize_combined(
-        query, entities, relations, batch_size, llm_model_name
+        query, entities, relations, batch_size, llm_model_name, global_config
     )
 
     # 統計日誌
@@ -294,6 +296,7 @@ async def _batch_recognize_combined(
     relations: list[dict],
     batch_size: int,
     llm_model_name: str = "gpt-4o-mini",
+    global_config: dict = None,
 ) -> tuple[list[dict], list[dict]]:
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
@@ -321,7 +324,8 @@ async def _batch_recognize_combined(
     relation_tasks = []
 
     # 使用 Semaphore 限制並發數（避免超過 API 限制）
-    max_concurrent = 4
+    # 從 global_config 獲取 llm_model_max_async（默認值 4，可通過環境變量 MAX_ASYNC 修改）
+    max_concurrent = global_config.get("llm_model_max_async", 4) if global_config else 4
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def process_with_semaphore(batch_items, batch_idx):

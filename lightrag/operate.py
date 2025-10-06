@@ -4514,6 +4514,7 @@ async def _build_query_context(
                 relations=relations_for_filtering,
                 batch_size=query_param.recognition_batch_size,
                 llm_model_name=llm_model_name,
+                global_config=global_config,
             )
 
             # Rebuild context with filtered data
@@ -5074,6 +5075,7 @@ async def _build_query_context(
                 relations=relations_for_filtering,
                 batch_size=query_param.recognition_batch_size,
                 llm_model_name=llm_model_name,
+                global_config=global_config,
             )
 
             # Rebuild context with filtered data
