@@ -2705,23 +2705,14 @@ async def _process_all_chunks_unified(
 
     logger.debug(f"After deduplication: {len(sorted_chunks)} unique chunks, max occurrence: {max(chunk_occurrence.values()) if chunk_occurrence else 0}")
 
-    # Step 4: Calculate dynamic target chunk count (global total, not split)
-    total_entities = len(entities_context) + len(relations_context)
-    if total_entities > 0:
-        # Each entity/relation can contribute up to max_related_chunks chunks
-        base_chunks = total_entities * max_related_chunks
+    # Step 4: Use chunk_top_k as the target chunk count
+    # Note: related_chunk_number is now enforced per-entity/relation during collection
+    # chunk_top_k is the final global limit
+    target_chunks = query_param.chunk_top_k or 20
 
-        # Apply chunk_top_k as global limit (no split between entity/relation)
-        max_chunks_total = query_param.chunk_top_k or 20
-
-        # Take minimum of calculated base and global limit
-        target_chunks = min(base_chunks, max_chunks_total)
-
-        # Ensure at least some chunks if entities/relations exist
+    # Ensure at least some chunks if we have any
+    if len(sorted_chunks) > 0:
         target_chunks = max(1, target_chunks)
-    else:
-        # Fallback to reasonable default
-        target_chunks = max_related_chunks
 
 
     # Step 5: Apply selection algorithm on occurrence-sorted chunks
@@ -4559,51 +4550,91 @@ async def _build_query_context(
         # Now retrieve and process chunks based on (potentially filtered) entities and relations
         # This happens regardless of Recognition Memory setting
         # Extract source_ids from current entities_context and relations_context
-        filtered_entity_source_ids = set()
+        # Limit each entity/relation to related_chunk_number chunks (using vector similarity if available)
+        related_chunk_number = global_config.get("related_chunk_number", 5)
+
+        # Helper function to select top N chunks by similarity
+        async def select_top_chunks_by_similarity(chunk_ids: list[str], query: str, limit: int) -> list[str]:
+            """Select top N chunks by vector similarity to query."""
+            if len(chunk_ids) <= limit:
+                return chunk_ids
+
+            # Try to use vector similarity if available
+            chunks_vdb = global_config.get("chunks_vdb")
+            if chunks_vdb and chunks_vdb.embedding_func:
+                try:
+                    # Get query embedding
+                    query_embedding = await chunks_vdb.embedding_func.func([query])
+                    if query_embedding:
+                        query_vec = query_embedding[0]
+
+                        # Get chunk vectors and calculate similarities
+                        chunk_similarities = []
+                        for chunk_id in chunk_ids:
+                            chunk_vec = await chunks_vdb.get_vector(chunk_id)
+                            if chunk_vec:
+                                from .utils import cosine_similarity
+                                similarity = cosine_similarity(query_vec, chunk_vec)
+                                chunk_similarities.append((chunk_id, similarity))
+
+                        # Sort by similarity and take top N
+                        if chunk_similarities:
+                            chunk_similarities.sort(key=lambda x: x[1], reverse=True)
+                            return [chunk_id for chunk_id, _ in chunk_similarities[:limit]]
+                except Exception as e:
+                    logger.debug(f"Failed to use vector similarity for chunk selection: {e}")
+
+            # Fallback: just take first N chunks
+            return chunk_ids[:limit]
+
+        # Use lists instead of sets to preserve occurrence information
+        # Each chunk_id may appear multiple times (from different entities/relations)
+        # This is important for accurate occurrence counting in unified processing
+        filtered_entity_chunks = []
         for entity in entities_context:
             source_id = entity.get("source_id", "")
             if source_id:
                 if GRAPH_FIELD_SEP in source_id:
-                    filtered_entity_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                    chunk_ids = source_id.split(GRAPH_FIELD_SEP)
+                    # Limit to related_chunk_number chunks per entity (with similarity ranking)
+                    limited_chunk_ids = await select_top_chunks_by_similarity(chunk_ids, query, related_chunk_number)
                 else:
-                    filtered_entity_source_ids.add(source_id)
+                    limited_chunk_ids = [source_id]
 
-        filtered_relation_source_ids = set()
+                # Retrieve chunks for this entity (allow duplicates across entities)
+                for chunk_id in limited_chunk_ids:
+                    chunk_data = await text_chunks_db.get_by_id(chunk_id)
+                    if chunk_data:
+                        filtered_entity_chunks.append({
+                            "content": chunk_data["content"],
+                            "file_path": chunk_data.get("file_path", "unknown_source"),
+                            "timestamp": chunk_data.get("timestamp", ""),
+                            "chunk_id": chunk_id,
+                            "source": "entity"
+                        })
+
+        filtered_relation_chunks = []
         for relation in relations_context:
             source_id = relation.get("source_id", "")
             if source_id:
                 if GRAPH_FIELD_SEP in source_id:
-                    filtered_relation_source_ids.update(source_id.split(GRAPH_FIELD_SEP))
+                    chunk_ids = source_id.split(GRAPH_FIELD_SEP)
+                    # Limit to related_chunk_number chunks per relation (with similarity ranking)
+                    limited_chunk_ids = await select_top_chunks_by_similarity(chunk_ids, query, related_chunk_number)
                 else:
-                    filtered_relation_source_ids.add(source_id)
+                    limited_chunk_ids = [source_id]
 
-        # Retrieve entity chunks for filtered entities
-        filtered_entity_chunks = []
-        if filtered_entity_source_ids:
-            for source_id in filtered_entity_source_ids:
-                chunk_data = await text_chunks_db.get_by_id(source_id)
-                if chunk_data:
-                    filtered_entity_chunks.append({
-                        "content": chunk_data["content"],
-                        "file_path": chunk_data.get("file_path", "unknown_source"),
-                        "timestamp": chunk_data.get("timestamp", ""),
-                        "chunk_id": source_id,
-                        "source": "entity"
-                    })
-
-        # Retrieve relation chunks for filtered relations
-        filtered_relation_chunks = []
-        if filtered_relation_source_ids:
-            for source_id in filtered_relation_source_ids:
-                chunk_data = await text_chunks_db.get_by_id(source_id)
-                if chunk_data:
-                    filtered_relation_chunks.append({
-                        "content": chunk_data["content"],
-                        "file_path": chunk_data.get("file_path", "unknown_source"),
-                        "timestamp": chunk_data.get("timestamp", ""),
-                        "chunk_id": source_id,
-                        "source": "relation"
-                    })
+                # Retrieve chunks for this relation (allow duplicates across relations)
+                for chunk_id in limited_chunk_ids:
+                    chunk_data = await text_chunks_db.get_by_id(chunk_id)
+                    if chunk_data:
+                        filtered_relation_chunks.append({
+                            "content": chunk_data["content"],
+                            "file_path": chunk_data.get("file_path", "unknown_source"),
+                            "timestamp": chunk_data.get("timestamp", ""),
+                            "chunk_id": chunk_id,
+                            "source": "relation"
+                        })
 
         # Use unified chunk processing on filtered chunks
         logger.debug(f"Starting unified chunk processing: {len(filtered_entity_chunks)} entity + {len(filtered_relation_chunks)} relation chunks")

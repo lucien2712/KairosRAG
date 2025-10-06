@@ -239,7 +239,7 @@ async def _batch_recognize_combined(
         entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
         relations_json = json.dumps(relations_data, ensure_ascii=False, indent=2)
 
-        prompt = PROMPTS["recognition_combined_filter"].format(
+        prompt = PROMPTS["recognition_filter"].format(
             query=query,
             entities_json=entities_json,
             relations_json=relations_json
@@ -306,7 +306,7 @@ async def _batch_recognize_combined(
             entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
             relations_json = "[]"  # 空的 relations
 
-            prompt = PROMPTS["recognition_combined_filter"].format(
+            prompt = PROMPTS["recognition_filter"].format(
                 query=query,
                 entities_json=entities_json,
                 relations_json=relations_json
