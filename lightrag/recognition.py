@@ -321,7 +321,7 @@ async def _batch_recognize_combined(
     relation_tasks = []
 
     # 使用 Semaphore 限制並發數（避免超過 API 限制）
-    max_concurrent = 5
+    max_concurrent = 4
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def process_with_semaphore(batch_items, batch_idx):
