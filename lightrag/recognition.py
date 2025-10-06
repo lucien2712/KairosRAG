@@ -164,6 +164,130 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, llm_mo
     return None
 
 
+async def _process_single_relation_batch(
+    query: str,
+    relation_batch_items: list[tuple],
+    entity_map: dict,
+    client,
+    llm_model_name: str,
+    batch_index: int,
+) -> dict:
+    """處理單個 relation batch 並返回結果"""
+    relation_batch_ids = {rel_id: rel_data for rel_id, rel_data in relation_batch_items}
+
+    # 收集這個 batch 的 relations 涉及的所有 entities
+    batch_entity_names = set()
+    entities_in_batch = set()
+    for rel_id, rel_data in relation_batch_items:
+        src_id = rel_data.get("src_id")
+        tgt_id = rel_data.get("tgt_id")
+        if src_id:
+            batch_entity_names.add(src_id)
+            entities_in_batch.add(src_id)
+        if tgt_id:
+            batch_entity_names.add(tgt_id)
+            entities_in_batch.add(tgt_id)
+
+    # 構建這個 batch 的 entities
+    entity_batch = [entity_map[name] for name in batch_entity_names if name in entity_map]
+
+    # 構建 JSON
+    entities_data = [
+        {"entity_name": e.get("entity_name"), "description": e.get("description", "")}
+        for e in entity_batch
+    ]
+    relations_data = [
+        {
+            "id": rel_id,
+            "src_id": rel_data.get("src_id"),
+            "tgt_id": rel_data.get("tgt_id"),
+            "description": rel_data.get("description", "")
+        }
+        for rel_id, rel_data in relation_batch_ids.items()
+    ]
+
+    entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
+    relations_json = json.dumps(relations_data, ensure_ascii=False, indent=2)
+
+    prompt = PROMPTS["recognition_filter"].format(
+        query=query,
+        entities_json=entities_json,
+        relations_json=relations_json
+    )
+
+    try:
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
+
+        if result is None:
+            logger.warning(f"Failed to get valid response for relation batch {batch_index} after retries, keeping all items")
+            return {
+                "entities": entity_batch,
+                "relations": list(relation_batch_ids.values()),
+                "entities_in_relations": entities_in_batch,
+            }
+
+        # 獲取要移除的 IDs
+        removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
+        removed_relation_ids = set(result.get("irrelevant_relation_ids", []))
+
+        # 過濾 entities 和 relations
+        kept_entities = [e for e in entity_batch if e.get("entity_name") not in removed_entity_ids]
+        kept_relations = [rel_data for rel_id, rel_data in relation_batch_ids.items() if rel_id not in removed_relation_ids]
+
+        return {
+            "entities": kept_entities,
+            "relations": kept_relations,
+            "entities_in_relations": entities_in_batch,
+        }
+
+    except Exception as e:
+        logger.warning(f"Recognition filter failed for relation batch {batch_index}: {e}. Keeping all items.")
+        return {
+            "entities": entity_batch,
+            "relations": list(relation_batch_ids.values()),
+            "entities_in_relations": entities_in_batch,
+        }
+
+
+async def _process_single_orphan_batch(
+    query: str,
+    orphan_batch: list[dict],
+    client,
+    llm_model_name: str,
+    batch_index: int,
+) -> list[dict]:
+    """處理單個 orphan entity batch 並返回過濾後的 entities"""
+    entities_data = [
+        {"entity_name": e.get("entity_name"), "description": e.get("description", "")}
+        for e in orphan_batch
+    ]
+
+    entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
+    relations_json = "[]"
+
+    prompt = PROMPTS["recognition_filter"].format(
+        query=query,
+        entities_json=entities_json,
+        relations_json=relations_json
+    )
+
+    try:
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
+
+        if result is None:
+            logger.warning(f"Failed to get valid response for orphan batch {batch_index} after retries, keeping all items")
+            return orphan_batch
+
+        removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
+        kept_entities = [e for e in orphan_batch if e.get("entity_name") not in removed_entity_ids]
+
+        return kept_entities
+
+    except Exception as e:
+        logger.warning(f"Recognition orphan filter failed for batch {batch_index}: {e}. Keeping all items.")
+        return orphan_batch
+
+
 async def _batch_recognize_combined(
     query: str,
     entities: list[dict],
@@ -174,169 +298,104 @@ async def _batch_recognize_combined(
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
 
+    使用 asyncio.gather() 並行處理多個 batches 以提升速度
+
     處理流程：
-    1. 以 relation 為主進行 batch 切分
-    2. 每個 batch 包含該 batch 的 relations + 這些 relations 涉及的所有 entities
-    3. 最後處理沒有出現在任何 relation 中的落單 entities
+    1. 並行處理所有 relation batches
+    2. 並行處理所有 orphan entity batches
+    3. 合併所有結果
     """
     client = OpenAI()
 
-    # 為 relations 創建 ID 映射（完整保留原始 dict）
+    # 為 relations 創建 ID 映射
     id_mapping = {}
     for i, rel in enumerate(relations):
-        # 生成唯一 ID
         rel_id = f"rel_{i}"
         id_mapping[rel_id] = rel
 
     # 建立 entity name 到 entity data 的映射
     entity_map = {e.get("entity_name"): e for e in entities}
 
-    filtered_entities = []
-    filtered_relations = []
-    entities_in_relations = set()  # 追蹤哪些 entities 出現在 relations 中
-
-    # Phase 1: 處理 relations (以 relation 為中心的 batch)
+    # Phase 1: 並行處理所有 relation batches
     relation_items = list(id_mapping.items())
+    relation_tasks = []
+
+    # 使用 Semaphore 限制並發數（避免超過 API 限制）
+    max_concurrent = 5
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def process_with_semaphore(batch_items, batch_idx):
+        async with semaphore:
+            return await _process_single_relation_batch(
+                query, batch_items, entity_map, client, llm_model_name, batch_idx
+            )
+
     for i in range(0, len(relation_items), batch_size):
         relation_batch_items = relation_items[i : i + batch_size]
-        relation_batch_ids = {rel_id: rel_data for rel_id, rel_data in relation_batch_items}
+        batch_idx = i // batch_size + 1
+        task = process_with_semaphore(relation_batch_items, batch_idx)
+        relation_tasks.append(task)
 
-        # 收集這個 batch 的 relations 涉及的所有 entities
-        batch_entity_names = set()
-        for rel_id, rel_data in relation_batch_items:
-            src_id = rel_data.get("src_id")
-            tgt_id = rel_data.get("tgt_id")
-            if src_id:
-                batch_entity_names.add(src_id)
-                entities_in_relations.add(src_id)
-            if tgt_id:
-                batch_entity_names.add(tgt_id)
-                entities_in_relations.add(tgt_id)
+    # 並行執行所有 relation batch 任務
+    relation_results = await asyncio.gather(*relation_tasks, return_exceptions=True)
 
-        # 構建這個 batch 的 entities（只包含 relation 涉及的 entities）
-        entity_batch = [entity_map[name] for name in batch_entity_names if name in entity_map]
+    # 合併結果
+    filtered_entities = []
+    filtered_relations = []
+    entities_in_relations = set()
+    seen_entities = set()  # 用於去重
 
-        # 構建 entities JSON
-        entities_data = [
-            {
-                "entity_name": e.get("entity_name"),
-                "description": e.get("description", "")
-            }
-            for e in entity_batch
-        ]
+    for result in relation_results:
+        if isinstance(result, Exception):
+            logger.error(f"Relation batch processing failed with exception: {result}")
+            continue
 
-        # 構建 relations JSON
-        relations_data = [
-            {
-                "id": rel_id,
-                "src_id": rel_data.get("src_id"),
-                "tgt_id": rel_data.get("tgt_id"),
-                "description": rel_data.get("description", "")
-            }
-            for rel_id, rel_data in relation_batch_ids.items()
-        ]
+        # 收集 entities（去重）
+        for entity in result["entities"]:
+            entity_name = entity.get("entity_name")
+            if entity_name and entity_name not in seen_entities:
+                filtered_entities.append(entity)
+                seen_entities.add(entity_name)
 
-        entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
-        relations_json = json.dumps(relations_data, ensure_ascii=False, indent=2)
+        # 收集 relations
+        filtered_relations.extend(result["relations"])
 
-        prompt = PROMPTS["recognition_filter"].format(
-            query=query,
-            entities_json=entities_json,
-            relations_json=relations_json
-        )
+        # 收集 entities_in_relations
+        entities_in_relations.update(result["entities_in_relations"])
 
-        try:
-            # 調用 OpenAI with retry
-            result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
-
-            # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
-            if result is None:
-                logger.warning(f"Failed to get valid response for relation batch {i//batch_size + 1} after retries, keeping all items")
-                filtered_entities.extend(entity_batch)
-                # 保留所有 relations
-                for rel_id, rel_data in relation_batch_ids.items():
-                    filtered_relations.append(rel_data)
-                continue
-
-            # 獲取要移除的 IDs
-            removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
-            removed_relation_ids = set(result.get("irrelevant_relation_ids", []))
-
-            # 保留不在移除列表中的 entities（relation batch 中涉及的 entities）
-            for entity in entity_batch:
-                entity_name = entity.get("entity_name")
-                if entity_name not in removed_entity_ids:
-                    # 檢查是否已經加入過（避免重複）
-                    if not any(e.get("entity_name") == entity_name for e in filtered_entities):
-                        filtered_entities.append(entity)
-
-            # 保留所有不在移除列表中的 relations
-            for rel_id, rel_data in relation_batch_ids.items():
-                if rel_id not in removed_relation_ids:
-                    filtered_relations.append(rel_data)
-
-        except Exception as e:
-            logger.warning(
-                f"Recognition combined filter failed for relation batch {i//batch_size + 1}: {e}. "
-                f"Keeping all {len(relation_batch_ids)} relations in this batch."
-            )
-            # 失敗時保留所有 relations
-            for rel_id, rel_data in relation_batch_ids.items():
-                filtered_relations.append(rel_data)
-
-    # Phase 2: 處理落單的 entities（沒有出現在任何 relation 中的）
+    # Phase 2: 並行處理所有 orphan entity batches
     orphan_entities = [e for e in entities if e.get("entity_name") not in entities_in_relations]
 
     if orphan_entities:
-        # logger.info(f"Processing {len(orphan_entities)} orphan entities (not in any relations)")
+        orphan_tasks = []
 
-        # 對落單 entities 進行 batch 處理
+        async def process_orphan_with_semaphore(orphan_batch, batch_idx):
+            async with semaphore:
+                return await _process_single_orphan_batch(
+                    query, orphan_batch, client, llm_model_name, batch_idx
+                )
+
         for i in range(0, len(orphan_entities), batch_size):
             orphan_batch = orphan_entities[i : i + batch_size]
+            batch_idx = i // batch_size + 1
+            task = process_orphan_with_semaphore(orphan_batch, batch_idx)
+            orphan_tasks.append(task)
 
-            # 構建 entities JSON（只有 entities，沒有 relations）
-            entities_data = [
-                {
-                    "entity_name": e.get("entity_name"),
-                    "description": e.get("description", "")
-                }
-                for e in orphan_batch
-            ]
+        # 並行執行所有 orphan batch 任務
+        orphan_results = await asyncio.gather(*orphan_tasks, return_exceptions=True)
 
-            entities_json = json.dumps(entities_data, ensure_ascii=False, indent=2)
-            relations_json = "[]"  # 空的 relations
+        # 合併 orphan 結果
+        for result in orphan_results:
+            if isinstance(result, Exception):
+                logger.error(f"Orphan batch processing failed with exception: {result}")
+                continue
 
-            prompt = PROMPTS["recognition_filter"].format(
-                query=query,
-                entities_json=entities_json,
-                relations_json=relations_json
-            )
-
-            try:
-                # 調用 OpenAI with retry
-                result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
-
-                # 如果提取失敗（經過 retry 後仍失敗），保留所有資料
-                if result is None:
-                    logger.warning(f"Failed to get valid response for orphan batch {i//batch_size + 1} after retries, keeping all items")
-                    filtered_entities.extend(orphan_batch)
-                    continue
-
-                # 獲取要移除的 entity IDs
-                removed_entity_ids = set(result.get("irrelevant_entity_ids", []))
-
-                # 保留不在移除列表中的 entities
-                for entity in orphan_batch:
-                    entity_name = entity.get("entity_name")
-                    if entity_name not in removed_entity_ids:
-                        filtered_entities.append(entity)
-
-            except Exception as e:
-                logger.warning(
-                    f"Recognition orphan filter failed for batch {i//batch_size + 1}: {e}. "
-                    f"Keeping all {len(orphan_batch)} orphan entities in this batch."
-                )
-                filtered_entities.extend(orphan_batch)
+            # 收集 orphan entities（去重）
+            for entity in result:
+                entity_name = entity.get("entity_name")
+                if entity_name and entity_name not in seen_entities:
+                    filtered_entities.append(entity)
+                    seen_entities.add(entity_name)
 
     # Fallback: 如果全部被過濾，保留 top-3
     if not filtered_entities and entities:

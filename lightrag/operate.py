@@ -4221,22 +4221,30 @@ async def _build_query_context(
 
                 # Build text_units_context from processed chunks
                 for i, chunk in enumerate(processed_chunks):
-                    text_units_context.append({
+                    chunk_context = {
                         "id": i + 1,
                         "content": chunk["content"],
                         "file_path": chunk.get("file_path", "unknown_source"),
-                        "The content is from": chunk.get("timestamp", ""),
-                    })
+                    }
+                    # Only add timestamp field if it exists and is not empty
+                    timestamp = chunk.get("timestamp", "")
+                    if timestamp:
+                        chunk_context["The content is from"] = timestamp
+                    text_units_context.append(chunk_context)
             except Exception as e:
                 logger.warning(f"Failed to process initial chunks: {e}")
                 # Fallback to raw chunks
                 for i, chunk in enumerate(initial_merged_chunks):
-                    text_units_context.append({
+                    chunk_context = {
                         "id": i + 1,
                         "content": chunk["content"],
                         "file_path": chunk.get("file_path", "unknown_source"),
-                        "The content is from": chunk.get("timestamp", ""),
-                    })
+                    }
+                    # Only add timestamp field if it exists and is not empty
+                    timestamp = chunk.get("timestamp", "")
+                    if timestamp:
+                        chunk_context["The content is from"] = timestamp
+                    text_units_context.append(chunk_context)
 
     # not necessary to use LLM to generate a response
     if not entities_context and not relations_context:
@@ -4244,8 +4252,13 @@ async def _build_query_context(
 
     # Keep original round-robin ordering logic for fair data balance
 
-    entities_str = json.dumps(entities_context, ensure_ascii=False)
-    relations_str = json.dumps(relations_context, ensure_ascii=False)
+    # Remove internal fields before sending to LLM
+    fields_to_remove = {"source_id", "created_at", "file_path"}
+    entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
+    relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+
+    entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
+    relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
     text_units_str = json.dumps(text_units_context, ensure_ascii=False)
 
     result = f"""-----Entities(KG)-----
@@ -4707,8 +4720,13 @@ async def _build_query_context(
         tokenizer = text_chunks_db.global_config.get("tokenizer")
         if final_merged_chunks and tokenizer:
             # Calculate dynamic token limit for text chunks
-            entities_str = json.dumps(entities_context, ensure_ascii=False)
-            relations_str = json.dumps(relations_context, ensure_ascii=False)
+            # Remove internal fields before sending to LLM
+            fields_to_remove = {"source_id", "created_at"}
+            entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
+            relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+
+            entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
+            relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
             
             # Calculate base context tokens (entities + relations + template)
             kg_context_template = """-----Entities(KG)-----
@@ -4793,12 +4811,16 @@ async def _build_query_context(
             # Rebuild text_units_context with final processed chunks
             text_units_context = []
             for i, chunk in enumerate(final_truncated_chunks):
-                text_units_context.append({
+                chunk_context = {
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "The content is from": chunk.get("timestamp", ""),
-                })
+                }
+                # Only add timestamp field if it exists and is not empty
+                timestamp = chunk.get("timestamp", "")
+                if timestamp:
+                    chunk_context["The content is from"] = timestamp
+                text_units_context.append(chunk_context)
             
             # logger.info(
             #     f"Final chunk processing: {len(final_merged_chunks)} -> {len(text_units_context)} "
@@ -4979,12 +5001,16 @@ async def _build_query_context(
             # Rebuild text_units_context with final processed chunks
             text_units_context = []
             for i, chunk in enumerate(final_truncated_chunks):
-                text_units_context.append({
+                chunk_context = {
                     "id": i + 1,
                     "content": chunk["content"],
                     "file_path": chunk.get("file_path", "unknown_source"),
-                    "The content is from": chunk.get("timestamp", ""),
-                })
+                }
+                # Only add timestamp field if it exists and is not empty
+                timestamp = chunk.get("timestamp", "")
+                if timestamp:
+                    chunk_context["The content is from"] = timestamp
+                text_units_context.append(chunk_context)
             
             logger.info(
                 f"Final chunk processing: {len(final_merged_chunks)} -> {len(text_units_context)} "
@@ -5112,8 +5138,13 @@ async def _build_query_context(
             chunk["id"] = i + 1
 
         # Regenerate final result with updated context
-        entities_str = json.dumps(entities_context, ensure_ascii=False)
-        relations_str = json.dumps(relations_context, ensure_ascii=False)
+        # Remove internal fields before sending to LLM
+        fields_to_remove = {"source_id", "created_at"}
+        entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
+        relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+
+        entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
+        relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
         text_units_str = json.dumps(text_units_context, ensure_ascii=False)
 
         result = """-----Entities(KG)-----
