@@ -2521,136 +2521,6 @@ async def _get_relationship_vectors_batch(
         logger.debug(f"Error getting relationship vectors batch: {e}")
         return {}
 
-async def _calculate_relevance_score(
-    node: dict,
-    edge: dict,
-    current_hop: int,
-    ll_keywords: str,
-    hl_keywords: str,
-    entities_vdb: BaseVectorStorage,
-    relationships_vdb: BaseVectorStorage,
-    entity_vectors_cache: dict[str, list[float]] = None,
-    relationship_vectors_cache: dict[str, list[float]] = None,
-    query_ll_embedding: list[float] = None,
-    query_hl_embedding: list[float] = None,
-) -> float:
-    """Calculate 4-dimensional relevance score for multi-hop retrieval."""
-    
-    # 1. Low-level similarity (0.4 weight) - calculate embedding similarity
-    ll_sim = 0.0
-    if ll_keywords and node and "entity_name" in node:
-        try:
-            entity_name = node["entity_name"]
-            
-            # Try to get query embedding from cache first
-            import numpy as np
-            if query_ll_embedding is not None:
-                query_vec = np.array(query_ll_embedding)
-            else:
-                # Fallback: compute query embedding
-                embedding_func = entities_vdb.embedding_func
-                if embedding_func and embedding_func.func:
-                    query_embedding = await embedding_func.func([ll_keywords])
-                    query_vec = np.array(query_embedding[0])
-                else:
-                    query_vec = None
-            
-            # Try to get entity embedding from cache first
-            if entity_vectors_cache and entity_name in entity_vectors_cache:
-                node_vec = np.array(entity_vectors_cache[entity_name])
-            else:
-                # Fallback: compute entity embedding
-                embedding_func = entities_vdb.embedding_func
-                if embedding_func and embedding_func.func:
-                    node_content = f"{entity_name} {node.get('description', '')}"
-                    node_embedding = await embedding_func.func([node_content])
-                    node_vec = np.array(node_embedding[0])
-                else:
-                    node_vec = None
-            
-            # Calculate cosine similarity if both vectors are available
-            if query_vec is not None and node_vec is not None:
-                import numpy as np
-                
-                # Normalize vectors
-                query_norm = np.linalg.norm(query_vec)
-                node_norm = np.linalg.norm(node_vec)
-                
-                if query_norm > 0 and node_norm > 0:
-                    ll_sim = np.dot(query_vec, node_vec) / (query_norm * node_norm)
-                    ll_sim = max(0.0, ll_sim)  # Ensure non-negative
-            
-        except Exception as e:
-            logger.warning(f"Error calculating low-level similarity: {e}")
-    
-    # 2. High-level similarity (0.4 weight) - calculate embedding similarity
-    hl_sim = 0.0
-    if hl_keywords and edge and "src_id" in edge and "tgt_id" in edge:
-        try:
-            edge_src = edge.get('src_id', '')
-            edge_tgt = edge.get('tgt_id', '')
-            edge_key = f"{edge_src}-{edge_tgt}"
-            
-            # Try to get query embedding from cache first
-            import numpy as np
-            if query_hl_embedding is not None:
-                query_vec = np.array(query_hl_embedding)
-            else:
-                # Fallback: compute query embedding
-                embedding_func = relationships_vdb.embedding_func
-                if embedding_func and embedding_func.func:
-                    query_embedding = await embedding_func.func([hl_keywords])
-                    query_vec = np.array(query_embedding[0])
-                else:
-                    query_vec = None
-            
-            # Try to get relationship embedding from cache first
-            if relationship_vectors_cache and edge_key in relationship_vectors_cache:
-                edge_vec = np.array(relationship_vectors_cache[edge_key])
-            else:
-                # Fallback: compute relationship embedding
-                embedding_func = relationships_vdb.embedding_func
-                if embedding_func and embedding_func.func:
-                    # Use same format as initial search: "keywords\tsrc\ntgt\ndescription"
-                    edge_keywords = edge.get('keywords', '')
-                    edge_desc = edge.get('description', '')
-                    edge_content = f"{edge_keywords}\t{edge_src}\n{edge_tgt}\n{edge_desc}"
-                    edge_embedding = await embedding_func.func([edge_content])
-                    edge_vec = np.array(edge_embedding[0])
-                else:
-                    edge_vec = None
-            
-            # Calculate cosine similarity if both vectors are available
-            if query_vec is not None and edge_vec is not None:
-                import numpy as np
-                
-                # Normalize vectors
-                query_norm = np.linalg.norm(query_vec)
-                edge_norm = np.linalg.norm(edge_vec)
-                
-                if query_norm > 0 and edge_norm > 0:
-                    hl_sim = np.dot(query_vec, edge_vec) / (query_norm * edge_norm)
-                    hl_sim = max(0.0, hl_sim)  # Ensure non-negative
-                    
-        except Exception as e:
-            logger.warning(f"Error calculating high-level similarity: {e}")
-    
-    
-    # 3. Distance decay (0.1 weight) - decay factor per hop
-    decay = 0.8 ** current_hop
-    
-    # Combine scores with weights
-    final_score = (
-        0.4 * ll_sim + 
-        0.4 * hl_sim + 
-        0.2 * decay
-    )
-    
-    logger.debug(f"Relevance score for {node.get('entity_name', 'unknown')}: ll_sim={ll_sim:.3f}, hl_sim={hl_sim:.3f}, decay={decay:.3f}, final={final_score:.3f}")
-    
-    return final_score
-
-
 async def _process_all_chunks_unified(
     entity_chunks: list[dict],
     relation_chunks: list[dict],
@@ -2889,6 +2759,11 @@ def _calculate_relevance_scores_vectorized(
         0.4 * hl_similarities + 
         0.2 * decay
     )
+    """
+    0.45 * ll_similarities + 
+        0.45 * hl_similarities + 
+        0.1 * decay
+    """
     
     return final_scores.tolist()
 
