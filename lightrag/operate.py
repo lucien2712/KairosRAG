@@ -4128,13 +4128,14 @@ async def _build_query_context(
     # Keep original round-robin ordering logic for fair data balance
 
     # Remove internal fields before sending to LLM
-    fields_to_remove = {"source_id", "created_at", "file_path"}
+    fields_to_remove = {"source_id", "created_at", "file_path","id"}
     entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
     relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+    chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
     entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
     relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
-    text_units_str = json.dumps(text_units_context, ensure_ascii=False)
+    text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
 
     result = f"""-----Entities(KG)-----
 
@@ -4597,9 +4598,10 @@ async def _build_query_context(
         if final_merged_chunks and tokenizer:
             # Calculate dynamic token limit for text chunks
             # Remove internal fields before sending to LLM
-            fields_to_remove = {"source_id", "created_at"}
+            fields_to_remove = {"source_id", "created_at", "file_path","id"}
             entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
             relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+            chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
             entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
             relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
@@ -4800,8 +4802,13 @@ async def _build_query_context(
         tokenizer = text_chunks_db.global_config.get("tokenizer")
         if final_merged_chunks and tokenizer:
             # Same token processing logic as in multi-hop expansion
-            entities_str = json.dumps(entities_context, ensure_ascii=False)
-            relations_str = json.dumps(relations_context, ensure_ascii=False)
+            # Remove internal fields before token calculation
+            fields_to_remove = {"source_id", "created_at", "file_path","id"}
+            entities_for_token_calc = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
+            relations_for_token_calc = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+
+            entities_str = json.dumps(entities_for_token_calc, ensure_ascii=False)
+            relations_str = json.dumps(relations_for_token_calc, ensure_ascii=False)
             
             kg_context_template = """-----Entities(KG)-----
 
@@ -5016,13 +5023,14 @@ async def _build_query_context(
 
         # Regenerate final result with updated context
         # Remove internal fields before sending to LLM
-        fields_to_remove = {"source_id", "created_at"}
+        fields_to_remove = {"source_id", "created_at", "file_path","id"}
         entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
         relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+        chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
         entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
         relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
-        text_units_str = json.dumps(text_units_context, ensure_ascii=False)
+        text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
 
         result = """-----Entities(KG)-----
 
@@ -5646,7 +5654,9 @@ async def naive_query(
             }
         )
 
-    text_units_str = json.dumps(text_units_context, ensure_ascii=False)
+    # Remove id field before sending to LLM
+    chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
+    text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
     if query_param.only_need_context:
         return f"""
 ---Document Chunks(DC)---
