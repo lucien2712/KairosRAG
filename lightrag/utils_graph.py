@@ -766,6 +766,30 @@ async def amerge_entities(
             for key, value in target_entity_data.items():
                 merged_entity_data[key] = value
 
+            # 3.1 Deduplicate entity description (same as normal insert at operate.py:1487-1492)
+            if "description" in merged_entity_data and merged_entity_data["description"]:
+                # Split description by \n\n separator
+                description_paragraphs = [
+                    p.strip()
+                    for p in merged_entity_data["description"].split("\n\n")
+                    if p.strip()
+                ]
+
+                # Deduplicate while preserving order
+                unique_paragraphs = list(dict.fromkeys(description_paragraphs))
+
+                # Log deduplication if duplicates were found
+                num_duplicates = len(description_paragraphs) - len(unique_paragraphs)
+                if num_duplicates > 0:
+                    logger.info(
+                        f"Agentic merge: Deduplicated '{target_entity}' description "
+                        f"({len(description_paragraphs)} -> {len(unique_paragraphs)} paragraphs, "
+                        f"removed {num_duplicates} duplicates)"
+                    )
+
+                # Join back with \n\n
+                merged_entity_data["description"] = "\n\n".join(unique_paragraphs)
+
             # 4. Get all relationships of the source entities
             all_relations = []
             for entity_name in source_entities:
@@ -821,6 +845,23 @@ async def amerge_entities(
                             "weight": "max",
                         },
                     )
+
+                    # Deduplicate relation description
+                    if "description" in merged_relation and merged_relation["description"]:
+                        description_paragraphs = [
+                            p.strip()
+                            for p in merged_relation["description"].split("\n\n")
+                            if p.strip()
+                        ]
+                        unique_paragraphs = list(dict.fromkeys(description_paragraphs))
+                        num_duplicates = len(description_paragraphs) - len(unique_paragraphs)
+                        if num_duplicates > 0:
+                            logger.debug(
+                                f"Agentic merge: Deduplicated relation '{new_src}->{new_tgt}' description "
+                                f"({len(description_paragraphs)} -> {len(unique_paragraphs)} paragraphs)"
+                            )
+                        merged_relation["description"] = "\n\n".join(unique_paragraphs)
+
                     relation_updates[relation_key]["data"] = merged_relation
                     logger.debug(
                         f"Merged duplicate relationship: {new_src} -> {new_tgt}"
