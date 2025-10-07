@@ -79,7 +79,7 @@ async def recognition_memory_filter(
     relations: list[dict],
     llm_model_func=None,  # 不再需要，保留參數為了向後兼容
     batch_size: int = 10,
-    llm_model_name: str = "gpt-4o-mini",  # 新增參數
+    tool_llm_model_name: str = "gpt-4o-mini",  # 工具專用 LLM（僅支援 OpenAI-compatible API）
     global_config: dict = None,  # 新增參數：用於獲取 llm_model_max_async
 ) -> tuple[list[dict], list[dict]]:
     """
@@ -89,9 +89,9 @@ async def recognition_memory_filter(
         query: 用戶查詢
         entities: 3-perspective 檢索到的所有實體
         relations: 3-perspective 檢索到的所有關係
-        llm_model_func: LLM 模型函數（使用現有的）
+        llm_model_func: LLM 模型函數（已棄用，保留為了向後兼容）
         batch_size: 批次大小
-        llm_model_name: LLM 模型名稱
+        tool_llm_model_name: 工具專用 LLM 模型名稱（僅支援 OpenAI-compatible API）
         global_config: 全局配置字典，用於獲取 llm_model_max_async
 
     Returns:
@@ -102,7 +102,7 @@ async def recognition_memory_filter(
 
     # 一起處理 entities 和 relations（而非並行分開處理）
     filtered_entities, filtered_relations = await _batch_recognize_combined(
-        query, entities, relations, batch_size, llm_model_name, global_config
+        query, entities, relations, batch_size, tool_llm_model_name, global_config
     )
 
     # 統計日誌
@@ -118,7 +118,7 @@ async def recognition_memory_filter(
     return filtered_entities, filtered_relations
 
 
-async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, llm_model_name: str = "gpt-4o-mini"):
+async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_llm_model_name: str = "gpt-4o-mini"):
     """
     調用 LLM 並在失敗時重試
 
@@ -126,7 +126,7 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, llm_mo
         client: OpenAI client
         prompt: LLM prompt
         max_retries: 最大重試次數
-        llm_model_name: LLM 模型名稱
+        tool_llm_model_name: 工具專用 LLM 模型名稱（僅支援 OpenAI-compatible API）
 
     Returns:
         提取的 JSON 結果，或 None（失敗）
@@ -135,7 +135,7 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, llm_mo
         try:
             response = await asyncio.to_thread(
                 lambda: client.chat.completions.create(
-                    model=llm_model_name,
+                    model=tool_llm_model_name,
                     messages=[
                         {"role": "user", "content": prompt}
                     ],
@@ -171,7 +171,7 @@ async def _process_single_relation_batch(
     relation_batch_items: list[tuple],
     entity_map: dict,
     client,
-    llm_model_name: str,
+    tool_llm_model_name: str,
     batch_index: int,
 ) -> dict:
     """處理單個 relation batch 並返回結果"""
@@ -218,7 +218,7 @@ async def _process_single_relation_batch(
     )
 
     try:
-        result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name)
 
         if result is None:
             logger.warning(f"Failed to get valid response for relation batch {batch_index} after retries, keeping all items")
@@ -255,7 +255,7 @@ async def _process_single_orphan_batch(
     query: str,
     orphan_batch: list[dict],
     client,
-    llm_model_name: str,
+    tool_llm_model_name: str,
     batch_index: int,
 ) -> list[dict]:
     """處理單個 orphan entity batch 並返回過濾後的 entities"""
@@ -274,7 +274,7 @@ async def _process_single_orphan_batch(
     )
 
     try:
-        result = await _call_llm_with_retry(client, prompt, max_retries=2, llm_model_name=llm_model_name)
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name)
 
         if result is None:
             logger.warning(f"Failed to get valid response for orphan batch {batch_index} after retries, keeping all items")
@@ -295,7 +295,7 @@ async def _batch_recognize_combined(
     entities: list[dict],
     relations: list[dict],
     batch_size: int,
-    llm_model_name: str = "gpt-4o-mini",
+    tool_llm_model_name: str = "gpt-4o-mini",
     global_config: dict = None,
 ) -> tuple[list[dict], list[dict]]:
     """
@@ -331,7 +331,7 @@ async def _batch_recognize_combined(
     async def process_with_semaphore(batch_items, batch_idx):
         async with semaphore:
             return await _process_single_relation_batch(
-                query, batch_items, entity_map, client, llm_model_name, batch_idx
+                query, batch_items, entity_map, client, tool_llm_model_name, batch_idx
             )
 
     for i in range(0, len(relation_items), batch_size):
@@ -376,7 +376,7 @@ async def _batch_recognize_combined(
         async def process_orphan_with_semaphore(orphan_batch, batch_idx):
             async with semaphore:
                 return await _process_single_orphan_batch(
-                    query, orphan_batch, client, llm_model_name, batch_idx
+                    query, orphan_batch, client, tool_llm_model_name, batch_idx
                 )
 
         for i in range(0, len(orphan_entities), batch_size):

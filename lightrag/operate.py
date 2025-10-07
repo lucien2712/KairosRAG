@@ -4507,13 +4507,13 @@ async def _build_query_context(
                 })
 
             # Use OpenAI to filter
-            llm_model_name = global_config.get("llm_model_name", "gpt-4o-mini")
+            tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
                 relations=relations_for_filtering,
                 batch_size=query_param.recognition_batch_size,
-                llm_model_name=llm_model_name,
+                tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
             )
 
@@ -5068,13 +5068,13 @@ async def _build_query_context(
                 })
 
             # Use OpenAI to filter
-            llm_model_name = global_config.get("llm_model_name", "gpt-4o-mini")
+            tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
                 relations=relations_for_filtering,
                 batch_size=query_param.recognition_batch_size,
-                llm_model_name=llm_model_name,
+                tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
             )
 

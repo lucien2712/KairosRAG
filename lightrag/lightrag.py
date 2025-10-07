@@ -298,8 +298,9 @@ class LightRAG:
     llm_model_func: Callable[..., object] | None = field(default=None)
     """Function for interacting with the large language model (LLM). Must be set before use."""
 
-    llm_model_name: str = field(default="gpt-4o-mini")
-    """Name of the LLM model used for generating responses."""
+    tool_llm_model_name: str = field(default="gpt-4o-mini")
+    """Name of the LLM model used for tool-based operations (agentic_merging, entity_type_augmentation, recognition).
+    Note: Only supports OpenAI-compatible APIs. For main query operations, use llm_model_func instead."""
 
     summary_max_tokens: int = field(
         default=int(os.getenv("SUMMARY_MAX_TOKENS", DEFAULT_SUMMARY_MAX_TOKENS))
@@ -3070,12 +3071,12 @@ class LightRAG:
                 print(f"Failed to load entity pair cache: {e}")
                 entity_pair_cache = {}
         
-        # Initialize LLM using self.llm_model_name
+        # Initialize LLM using self.tool_llm_model_name
         llm = ChatOpenAI(
-            model=self.llm_model_name,
+            model=self.tool_llm_model_name,
             api_key=os.getenv("OPENAI_API_KEY"),
         )
-        print(f"LLM initialized: {self.llm_model_name}")
+        print(f"LLM initialized: {self.tool_llm_model_name}")
         
         # Define the merge tool for LLM
         @tool
@@ -3903,7 +3904,7 @@ class LightRAG:
             )
             
             response = client.chat.completions.create(
-                model=self.llm_model_name,
+                model=self.tool_llm_model_name,
                 messages=[
                     {
                         "role": "system",
@@ -3936,7 +3937,7 @@ class LightRAG:
             client = self._create_openai_client()
             
             response = client.chat.completions.create(
-                model=self.llm_model_name,
+                model=self.tool_llm_model_name,
                 messages=[
                     {
                         "role": "system",
