@@ -2768,20 +2768,6 @@ def _calculate_relevance_scores_vectorized(
     return final_scores.tolist()
 
 
-
-
-def _allocate_expansion_resources(total_neighbors: int, top_fastrp_nodes: int) -> tuple[int, int]:
-    """Allocate neighbor budget between semantic expansion and structural analysis."""
-    
-    # Structural analysis uses exactly top_fastrp_nodes
-    structural_neighbors = min(top_fastrp_nodes, total_neighbors - 1)  # Leave at least 1 for semantic
-    
-    # Calculate semantic neighbors from remaining budget
-    semantic_neighbors = total_neighbors - structural_neighbors
-    
-    return semantic_neighbors, structural_neighbors
-
-
 async def _multi_hop_expand(
     seed_nodes: list[dict],
     ll_keywords: str,
