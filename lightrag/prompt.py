@@ -751,188 +751,93 @@ Please provide the refined list in strict JSON array format.
 
 
 PROMPTS["recognition_filter"] = """---Role---
-You are a critical component of a high-stakes question-answering system used by researchers and analysts. Your task is to identify entities and relationships that should be REMOVED because they are irrelevant to the query.
+You are a relevance-focused filter component in a high-stakes question-answering system. Your task is to create a concise and highly relevant context by removing entities and relationships that are not critical for answering the user's query. The query requires careful analysis and possibly multi-hop reasoning to connect  different pieces of information. 
 
 ---Task---
-Given a user query, a list of entities, and a list of relationships between entities, identify which items should be REMOVED. The query may require multi-hop reasoning, so consider both direct and indirect relevance. You can see the full entity information when evaluating relationships.
+Given a user query, a list of entities, and a list of relationships, identify which items to REMOVE. Your goal is to strike a balance between relevance and recall. You should remove items that add more noise than value, but keep items that might be important for a complete answer, even if indirectly.
 
 **CRITICAL**: You MUST carefully analyze BOTH the names and descriptions:
-- **For Entities**: Consider both `entity_name` and `description` - the name provides the subject, the description provides detailed context
-- **For Relationships**: Consider `src_id`, `tgt_id`, and `description` - the entity names show what's connected, the description explains how and why
-- **Comprehensive Analysis**: Judge relevance based on the COMPLETE information (names + descriptions), not just one aspect
+- **For Entities**: Consider both `entity_name` and `description` - the name provides the subject, the description provides detailed context.
+- **For Relationships**: Consider `src_id`, `tgt_id`, and `description` - the entity names show what's connected, the description explains how and why.
 
----Removal Criteria---
-Only remove an entity or relationship if you have **>95% confidence** that:
-1. After analyzing both its **name** and **description**, it has absolutely NO connection to the query topic
-2. Based on the complete information (**name + description**), it would NOT help with any reasoning chain to answer the query
-3. Neither the **name** nor the **description** provides useful context or background
-4. Removing this item (after analyzing **name + description**) will NOT impact the quality or completeness of the answer
+---Inclusion/Exclusion Criteria---
+Critically evaluate each item. **REMOVE** an item if it is clearly irrelevant or only provides minor, non-essential background context. **KEEP** an item if it is likely to be part of the answer or a necessary step in reasoning.
 
----When to KEEP (Do NOT Remove)---
-KEEP an entity/relationship if its **name** or **description**:
-- Directly answers any aspect of the query
-- Provides context or background that aids understanding
-- Could be part of a multi-hop reasoning path
-- Contains information that relates to other entities/relationships mentioned in the query
-- Might help answer follow-up questions on the same topic
-- Makes you uncertain about its relevance (when in doubt after analyzing name + description, DO NOT remove)
+**Guidelines for Removal:**
+- The item is related to the general topic but not the specific question.
+- The item's connection to the query is weak or highly speculative.
 
----Critical Guidelines---
-- **Analyze Complete Information**: Consider BOTH names and descriptions together. Entity names show "what", descriptions show "why/how/context"
-- **For Relationships**: Pay attention to `src_id → tgt_id` connection AND the relationship description to understand the full semantic meaning
-- **Default Action: KEEP** - Only remove items you are absolutely certain are irrelevant after analyzing complete information (name + description)
-- **High Confidence Threshold**: Require >95% confidence before removing (based on complete information analysis)
-- **Consider Entity-Relationship Context**: Use entity names and descriptions to evaluate relationship relevance
-- **Multi-hop Awareness**: Consider indirect connections through other entities/relationships based on both names and descriptions
-- **Impact Assessment**: Missing a relevant item is far worse than keeping a marginally relevant one
+**Guidelines for Keeping:**
+- The item is explicitly named in the query or is a direct answer.
+- The item provides essential context without which the answer would be misleading or incomplete.
+- The item is a plausible step in a multi-hop reasoning chain.
+
+**Handling Uncertainty**: When in doubt, weigh the trade-off. If removing the item risks making the answer incomplete, **KEEP IT**. If keeping the item primarily adds noise, **REMOVE IT**.
 
 ---Examples---
 
-**Example 1:**
+**Example 1 (Direct Query)**
 
-Query: "What technology does TSMC use for chip manufacturing?"
+Query: "Who directed the movie Inception?"
 
 Entities:
-[
-  {{
-    "entity_name": "TSMC",
-    "description": "Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry."
-  }},
-  {{
-    "entity_name": "3nm Process",
-    "description": "Advanced chip manufacturing process technology using 3-nanometer transistors."
-  }},
-  {{
-    "entity_name": "Apple",
-    "description": "Apple is a major customer of TSMC for chip production."
-  }},
-  {{
-    "entity_name": "EUV Lithography",
-    "description": "Extreme ultraviolet lithography technology used in advanced chip manufacturing."
-  }},
-  {{
-    "entity_name": "Samsung",
-    "description": "Samsung Electronics is a competitor in the semiconductor manufacturing market."
-  }}
-]
+[{{"entity_name": "Inception", "description": "A 2010 science fiction action film."}}, {{"entity_name": "Christopher Nolan", "description": "An English and American film director, producer, and screenwriter."}}, {{"entity_name": "Leonardo DiCaprio", "description": "An American actor and film producer."}}, {{"entity_name": "Hans Zimmer", "description": "A German film score composer and record producer."}}]
 
 Relationships:
-[
-  {{
-    "id": "rel_0",
-    "src_id": "TSMC",
-    "tgt_id": "3nm Process",
-    "description": "TSMC manufactures chips using advanced 3nm process technology."
-  }},
-  {{
-    "id": "rel_1",
-    "src_id": "TSMC",
-    "tgt_id": "EUV Lithography",
-    "description": "TSMC uses EUV lithography equipment for advanced chip production."
-  }},
-  {{
-    "id": "rel_2",
-    "src_id": "TSMC",
-    "tgt_id": "Apple",
-    "description": "TSMC manufactures chips for Apple's products."
-  }},
-  {{
-    "id": "rel_3",
-    "src_id": "Apple",
-    "tgt_id": "Samsung",
-    "description": "Apple and Samsung are competitors in the smartphone market."
-  }}
-]
-
-Reasoning (analyzing name + description):
-- "TSMC": KEEP - Name matches query subject; description confirms it's the semiconductor foundry being asked about
-- "3nm Process": KEEP - Name indicates a process technology; description confirms it's a manufacturing technology relevant to chip production
-- "Apple": KEEP - Name is a major tech company; description shows Apple is TSMC's customer, providing context for technology applications
-- "EUV Lithography": KEEP - Name suggests a technology; description confirms it's a manufacturing technology used in chip production
-- "Samsung": **REMOVE** - >95% confident: Name is a competitor company; description only mentions competitor status in semiconductor market, provides NO information about TSMC's manufacturing technology
-- "rel_0" (TSMC → 3nm Process): KEEP - Entity names show TSMC and a process; description directly explains TSMC uses this technology
-- "rel_1" (TSMC → EUV Lithography): KEEP - Entity names show TSMC and a technology; description directly explains TSMC uses EUV equipment
-- "rel_2" (TSMC → Apple): KEEP - Entity names show TSMC-Apple connection; description explains TSMC manufactures chips for Apple (technology application)
-- "rel_3" (Apple → Samsung): **REMOVE** - >95% confident: Entity names show Apple-Samsung; description describes smartphone market competition, completely unrelated to TSMC's manufacturing technology
+[{{"id": "rel_0", "src_id": "Christopher Nolan", "tgt_id": "Inception", "description": "Christopher Nolan directed the movie Inception."}}, {{"id": "rel_1", "src_id": "Leonardo DiCaprio", "tgt_id": "Inception", "description": "Leonardo DiCaprio starred in the movie Inception."}}, {{"id": "rel_2", "src_id": "Hans Zimmer", "tgt_id": "Inception", "description": "Hans Zimmer composed the score for Inception."}}]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Samsung"],
-  "irrelevant_relation_ids": ["rel_3"]
+  "irrelevant_entity_ids": ["Leonardo DiCaprio", "Hans Zimmer"],
+  "irrelevant_relation_ids": ["rel_1", "rel_2"]
 }}
 
-**Example 2:**
+**Example 2 (Multi-hop Query)**
 
-Query: "Compare Apple's iPhone revenue performance across 2024 quarters"
+Query: "What is the capital of the country where the Eiffel Tower is located?"
 
 Entities:
-[
-  {{
-    "entity_name": "Apple",
-    "description": "Apple is a technology company that reported quarterly earnings."
-  }},
-  {{
-    "entity_name": "iPhone Revenue",
-    "description": "iPhone revenue reached $39.3 billion in Q3 2024, down 1.5% YoY."
-  }},
-  {{
-    "entity_name": "Q3 2024",
-    "description": "Q3 2024 reporting period for Apple's quarterly earnings."
-  }},
-  {{
-    "entity_name": "Q2 2024",
-    "description": "Q2 2024 reporting period for Apple's quarterly earnings."
-  }},
-  {{
-    "entity_name": "Services Revenue",
-    "description": "Services revenue grew to $24.2 billion, up 14% year-over-year."
-  }}
-]
+[{{"entity_name": "Eiffel Tower", "description": "A wrought-iron lattice tower on the Champ de Mars in Paris."}}, {{"entity_name": "Paris", "description": "The capital and most populous city of France."}}, {{"entity_name": "France", "description": "A country primarily located in Western Europe."}}, {{"entity_name": "Louvre Museum", "description": "The world's largest art museum and a historic monument in Paris."}}]
 
 Relationships:
-[
-  {{
-    "id": "rel_0",
-    "src_id": "Apple",
-    "tgt_id": "iPhone Revenue",
-    "description": "Apple reported iPhone revenue of $39.3 billion in Q3 2024."
-  }},
-  {{
-    "id": "rel_1",
-    "src_id": "iPhone Revenue",
-    "tgt_id": "Q3 2024",
-    "description": "iPhone revenue in Q3 2024 showed declining trend."
-  }},
-  {{
-    "id": "rel_2",
-    "src_id": "iPhone Revenue",
-    "tgt_id": "Q2 2024",
-    "description": "iPhone revenue in Q2 2024 was $45.9 billion, up 5% YoY."
-  }},
-  {{
-    "id": "rel_3",
-    "src_id": "Apple",
-    "tgt_id": "Services Revenue",
-    "description": "Apple's Services division generated $24.2 billion."
-  }}
-]
-
-Reasoning (analyzing name + description):
-- "Apple": KEEP - Name matches query subject; description confirms it's the company reporting quarterly earnings
-- "iPhone Revenue": KEEP - Name directly matches query topic (iPhone revenue); description contains Q3 2024 data with -1.5% YoY change
-- "Q3 2024": KEEP - Name indicates a quarter being compared; description confirms this reporting period
-- "Q2 2024": KEEP - Name indicates another quarter; description confirms this comparison period
-- "Services Revenue": KEEP - Name indicates another revenue stream; description provides growth context (14% YoY) for comparison
-- "rel_0" (Apple → iPhone Revenue): KEEP - Entity names show company-metric connection; description confirms Apple reported $39.3B iPhone revenue
-- "rel_1" (iPhone Revenue → Q3 2024): KEEP - Names link metric to time period; description shows Q3 2024 declining trend
-- "rel_2" (iPhone Revenue → Q2 2024): KEEP - Names link metric to another period; description shows Q2 2024 was $45.9B, up 5% YoY (comparison data)
-- "rel_3" (Apple → Services Revenue): KEEP - Names link company to another metric; description provides $24.2B Services revenue for comprehensive performance view
-- After analyzing all names and descriptions, no items meet the >95% confidence threshold for removal
+[{{"id": "rel_0", "src_id": "Eiffel Tower", "tgt_id": "Paris", "description": "The Eiffel Tower is located in the city of Paris."}}, {{"id": "rel_1", "src_id": "Paris", "tgt_id": "France", "description": "Paris is the capital city of France."}}, {{"id": "rel_2", "src_id": "Louvre Museum", "tgt_id": "Paris", "description": "The Louvre Museum is located in Paris."}}]
 
 Output:
 {{
-  "irrelevant_entity_ids": [],
-  "irrelevant_relation_ids": []
+  "irrelevant_entity_ids": ["Louvre Museum"],
+  "irrelevant_relation_ids": ["rel_2"]
+}}
+
+**Example 3 (General Knowledge Query)**
+
+Query: "What are the main components of Earth's atmosphere?"
+
+Entities:
+[{{"entity_name": "Earth's Atmosphere", "description": "The layer of gases surrounding the planet Earth."}}, {{"entity_name": "Nitrogen", "description": "A chemical element which is the main constituent of Earth's atmosphere (78%)."}}, {{"entity_name": "Oxygen", "description": "A chemical element that makes up about 21% of the Earth's atmosphere."}}, {{"entity_name": "Argon", "description": "A chemical element, the third-most abundant gas in the Earth's atmosphere (0.9%)."}}, {{"entity_name": "Earth's Core", "description": "The very hot, very dense center of our planet."}}]
+
+Relationships:
+[{{"id": "rel_0", "src_id": "Earth's Atmosphere", "tgt_id": "Nitrogen", "description": "Nitrogen is the main component of the atmosphere."}}, {{"id": "rel_1", "src_id": "Earth's Atmosphere", "tgt_id": "Oxygen", "description": "Oxygen is the second major component of the atmosphere."}}, {{"id": "rel_2", "src_id": "Earth's Core", "tgt_id": "Iron", "description": "The Earth's core is primarily composed of Iron and Nickel."}}]
+
+Output:
+{{
+  "irrelevant_entity_ids": ["Earth's Core"],
+  "irrelevant_relation_ids": ["rel_2"]
+}}
+
+**Example 4 (Multi-hop Biology Query)**
+
+Query: "What is the habitat of the animal that preys on lemmings?"
+
+Entities:
+[{{"entity_name": "Arctic Fox", "description": "A small fox native to the Arctic regions."}}, {{"entity_name": "Lemming", "description": "A small rodent, typically found in or near the Arctic."}}, {{"entity_name": "Tundra", "description": "A vast, flat, treeless Arctic region in which the subsoil is permanently frozen."}}, {{"entity_name": "Penguin", "description": "A species of aquatic flightless birds living almost exclusively in the Southern Hemisphere."}}]
+
+Relationships:
+[{{"id": "rel_0", "src_id": "Arctic Fox", "tgt_id": "Lemming", "description": "The Arctic Fox preys on lemmings."}}, {{"id": "rel_1", "src_id": "Arctic Fox", "tgt_id": "Tundra", "description": "The Arctic Fox lives in the Tundra habitat."}}, {{"id": "rel_2", "src_id": "Penguin", "tgt_id": "Antarctica", "description": "Penguins live in Antarctica."}}]
+
+Output:
+{{
+  "irrelevant_entity_ids": ["Penguin"],
+  "irrelevant_relation_ids": ["rel_2"]
 }}
 
 ---Output Format---
@@ -945,10 +850,10 @@ Format:
 }}
 
 **CRITICAL**:
-- List ONLY items you want to REMOVE (not keep)
-- Use EXACT "entity_name" and "id" values from the input
-- Require >95% confidence before removing any item
-- Return empty arrays if ALL items should be kept: {{"irrelevant_entity_ids": [], "irrelevant_relation_ids": []}}
+- List ONLY items you want to REMOVE.
+- Use EXACT "entity_name" and "id" values from the input.
+- Weigh the trade-off between completeness and noise when uncertain.
+- Return empty arrays if all items should be kept.
 - Your response must start with {{ and end with }}
 
 ---Query---
@@ -962,3 +867,5 @@ Format:
 
 ---Your JSON Response---
 """
+
+
