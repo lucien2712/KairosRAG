@@ -751,62 +751,72 @@ Please provide the refined list in strict JSON array format.
 
 
 PROMPTS["recognition_filter"] = """---Role---
-You are a relevance-focused filter component in a high-stakes question-answering system. Your task is to create a concise and highly relevant context by removing entities and relationships that are not critical for answering the user's query. The query requires careful analysis and possibly multi-hop reasoning to connect  different pieces of information. 
+You are a conservative filter component in a comprehensive question-answering system. Your primary goal is to preserve information completeness while only removing clearly irrelevant items. The query may require supporting context, background information, and multi-hop reasoning chains.
 
 ---Task---
-Given a user query, a list of entities, and a list of relationships, identify which items to REMOVE. Your goal is to strike a balance between relevance and recall. You should remove items that add more noise than value, but keep items that might be important for a complete answer, even if indirectly.
+Given a user query, a list of entities, and a list of relationships, identify which items to REMOVE. **Your filtering should be VERY conservative** - only remove items that are obviously unrelated to the query topic.
 
 **CRITICAL**: You MUST carefully analyze BOTH the names and descriptions:
 - **For Entities**: Consider both `entity_name` and `description` - the name provides the subject, the description provides detailed context.
 - **For Relationships**: Consider `src_id`, `tgt_id`, and `description` - the entity names show what's connected, the description explains how and why.
 
 ---Inclusion/Exclusion Criteria---
-Critically evaluate each item. **REMOVE** an item if it is clearly irrelevant or only provides minor, non-essential background context. **KEEP** an item if it is likely to be part of the answer or a necessary step in reasoning.
+Use a **high bar for removal**. Only **REMOVE** an item if it meets ALL of these conditions:
+1. The item is completely unrelated to the query topic
+2. The item cannot provide any supporting context or background information
+3. The item is not part of any plausible reasoning chain
 
-**Guidelines for Removal:**
-- The item is related to the general topic but not the specific question.
-- The item's connection to the query is weak or highly speculative.
+**Guidelines for Removal (STRICT - all must apply):**
+- The item belongs to a completely different domain or topic
+- The item has absolutely no semantic connection to any term in the query
+- The item cannot help understand the answer even as background context
 
-**Guidelines for Keeping:**
-- The item is explicitly named in the query or is a direct answer.
-- The item provides essential context without which the answer would be misleading or incomplete.
-- The item is a plausible step in a multi-hop reasoning chain.
+**Guidelines for Keeping (LIBERAL - any applies):**
+- The item is explicitly named in the query or directly answers it
+- The item provides supporting context, background information, or related concepts
+- The item could be part of a multi-hop reasoning chain (even indirectly)
+- The item provides historical, geographical, or conceptual context
+- The item is related to the same domain, time period, or topic area
 
-**Handling Uncertainty**: When in doubt, weigh the trade-off. If removing the item risks making the answer incomplete, **KEEP IT**. If keeping the item primarily adds noise, **REMOVE IT**.
+**Handling Uncertainty**: **Default to KEEPING items**. When in doubt about relevance, **ALWAYS KEEP IT**. It is better to preserve potentially useful information than to risk losing important context.
 
 ---Examples---
 
-**Example 1 (Direct Query)**
+**Example 1 (Direct Query with Supporting Context)**
 
 Query: "Who directed the movie Inception?"
 
 Entities:
-[{{"entity_name": "Inception", "description": "A 2010 science fiction action film."}}, {{"entity_name": "Christopher Nolan", "description": "An English and American film director, producer, and screenwriter."}}, {{"entity_name": "Leonardo DiCaprio", "description": "An American actor and film producer."}}, {{"entity_name": "Hans Zimmer", "description": "A German film score composer and record producer."}}]
+[{{"entity_name": "Inception", "description": "A 2010 science fiction action film."}}, {{"entity_name": "Christopher Nolan", "description": "An English and American film director, producer, and screenwriter."}}, {{"entity_name": "Leonardo DiCaprio", "description": "An American actor and film producer."}}, {{"entity_name": "Hans Zimmer", "description": "A German film score composer and record producer."}}, {{"entity_name": "The Godfather", "description": "A 1972 American crime film directed by Francis Ford Coppola."}}]
 
 Relationships:
 [{{"id": "rel_0", "src_id": "Christopher Nolan", "tgt_id": "Inception", "description": "Christopher Nolan directed the movie Inception."}}, {{"id": "rel_1", "src_id": "Leonardo DiCaprio", "tgt_id": "Inception", "description": "Leonardo DiCaprio starred in the movie Inception."}}, {{"id": "rel_2", "src_id": "Hans Zimmer", "tgt_id": "Inception", "description": "Hans Zimmer composed the score for Inception."}}]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Leonardo DiCaprio", "Hans Zimmer"],
-  "irrelevant_relation_ids": ["rel_1", "rel_2"]
+  "irrelevant_entity_ids": ["The Godfather"],
+  "irrelevant_relation_ids": []
 }}
 
-**Example 2 (Multi-hop Query)**
+Reasoning: Keep Leonardo DiCaprio and Hans Zimmer as they provide valuable context about the movie. Only remove The Godfather as it's completely unrelated.
+
+**Example 2 (Multi-hop Query with Context)**
 
 Query: "What is the capital of the country where the Eiffel Tower is located?"
 
 Entities:
-[{{"entity_name": "Eiffel Tower", "description": "A wrought-iron lattice tower on the Champ de Mars in Paris."}}, {{"entity_name": "Paris", "description": "The capital and most populous city of France."}}, {{"entity_name": "France", "description": "A country primarily located in Western Europe."}}, {{"entity_name": "Louvre Museum", "description": "The world's largest art museum and a historic monument in Paris."}}]
+[{{"entity_name": "Eiffel Tower", "description": "A wrought-iron lattice tower on the Champ de Mars in Paris."}}, {{"entity_name": "Paris", "description": "The capital and most populous city of France."}}, {{"entity_name": "France", "description": "A country primarily located in Western Europe."}}, {{"entity_name": "Louvre Museum", "description": "The world's largest art museum and a historic monument in Paris."}}, {{"entity_name": "Mount Fuji", "description": "An active volcano and the highest mountain in Japan."}}]
 
 Relationships:
 [{{"id": "rel_0", "src_id": "Eiffel Tower", "tgt_id": "Paris", "description": "The Eiffel Tower is located in the city of Paris."}}, {{"id": "rel_1", "src_id": "Paris", "tgt_id": "France", "description": "Paris is the capital city of France."}}, {{"id": "rel_2", "src_id": "Louvre Museum", "tgt_id": "Paris", "description": "The Louvre Museum is located in Paris."}}]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Louvre Museum"],
-  "irrelevant_relation_ids": ["rel_2"]
+  "irrelevant_entity_ids": ["Mount Fuji"],
+  "irrelevant_relation_ids": []
 }}
+
+Reasoning: Keep Louvre Museum as it provides geographical context about Paris. Only remove Mount Fuji as it's in a different country and completely unrelated.
 
 **Example 3 (General Knowledge Query)**
 
@@ -824,21 +834,23 @@ Output:
   "irrelevant_relation_ids": ["rel_2"]
 }}
 
-**Example 4 (Multi-hop Biology Query)**
+**Example 4 (Completely Unrelated Items)**
 
 Query: "What is the habitat of the animal that preys on lemmings?"
 
 Entities:
-[{{"entity_name": "Arctic Fox", "description": "A small fox native to the Arctic regions."}}, {{"entity_name": "Lemming", "description": "A small rodent, typically found in or near the Arctic."}}, {{"entity_name": "Tundra", "description": "A vast, flat, treeless Arctic region in which the subsoil is permanently frozen."}}, {{"entity_name": "Penguin", "description": "A species of aquatic flightless birds living almost exclusively in the Southern Hemisphere."}}]
+[{{"entity_name": "Arctic Fox", "description": "A small fox native to the Arctic regions."}}, {{"entity_name": "Lemming", "description": "A small rodent, typically found in or near the Arctic."}}, {{"entity_name": "Tundra", "description": "A vast, flat, treeless Arctic region in which the subsoil is permanently frozen."}}, {{"entity_name": "Penguin", "description": "A species of aquatic flightless birds living almost exclusively in the Southern Hemisphere."}}, {{"entity_name": "Python Programming", "description": "A high-level programming language used for software development."}}, {{"entity_name": "Bitcoin", "description": "A decentralized digital currency system."}}]
 
 Relationships:
 [{{"id": "rel_0", "src_id": "Arctic Fox", "tgt_id": "Lemming", "description": "The Arctic Fox preys on lemmings."}}, {{"id": "rel_1", "src_id": "Arctic Fox", "tgt_id": "Tundra", "description": "The Arctic Fox lives in the Tundra habitat."}}, {{"id": "rel_2", "src_id": "Penguin", "tgt_id": "Antarctica", "description": "Penguins live in Antarctica."}}]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Penguin"],
-  "irrelevant_relation_ids": ["rel_2"]
+  "irrelevant_entity_ids": ["Python Programming", "Bitcoin"],
+  "irrelevant_relation_ids": []
 }}
+
+Reasoning: Keep Penguin as it's still a polar animal providing some context. Only remove Python Programming and Bitcoin as they belong to completely different domains (technology/finance vs biology).
 
 ---Output Format---
 You MUST respond with ONLY a valid JSON object. No markdown code blocks, no explanations, no additional text.
