@@ -2755,14 +2755,18 @@ def _calculate_relevance_scores_vectorized(
     
     # 4. Vectorized final score computation
     final_scores = (
-        0.4 * ll_similarities + 
-        0.4 * hl_similarities + 
+        0.25 * ll_similarities + 
+        0.35 * hl_similarities + 
         0.2 * decay
     )
     """
     0.35 * ll_similarities + 
         0.45 * hl_similarities + 
         0.1 * decay
+
+      0.4 * ll_similarities + 
+        0.4 * hl_similarities + 
+        0.2 * decay
     """
 
     return final_scores.tolist()
@@ -4119,23 +4123,25 @@ async def _build_query_context(
     relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
     chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-    entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
-    relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
-    text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
+    # Format: one JSON object per line (LightRAG style)
+    entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_llm])
+    relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_llm])
+    text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
 
-    result = f"""-----Entities(KG)-----
+    result = f"""
+Knowledge Graph Data (Entity):
 
 ```json
 {entities_str}
 ```
 
------Relationships(KG)-----
+Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
 ```
 
------Document Chunks(DC)-----
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
 
 ```json
 {text_units_str}
@@ -4589,23 +4595,25 @@ async def _build_query_context(
             relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
             chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-            entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
-            relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
-            
+            # Format: one JSON object per line (LightRAG style)
+            entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_llm])
+            relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_llm])
+
             # Calculate base context tokens (entities + relations + template)
-            kg_context_template = """-----Entities(KG)-----
+            kg_context_template = """
+Knowledge Graph Data (Entity):
 
 ```json
 {entities_str}
 ```
 
------Relationships(KG)-----
+Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
 ```
 
------Document Chunks(DC)-----
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
 
 ```json
 []
@@ -4793,22 +4801,24 @@ async def _build_query_context(
             entities_for_token_calc = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
             relations_for_token_calc = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
 
-            entities_str = json.dumps(entities_for_token_calc, ensure_ascii=False)
-            relations_str = json.dumps(relations_for_token_calc, ensure_ascii=False)
-            
-            kg_context_template = """-----Entities(KG)-----
+            # Format: one JSON object per line (LightRAG style)
+            entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_token_calc])
+            relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_token_calc])
+
+            kg_context_template = """
+Knowledge Graph Data (Entity):
 
 ```json
 {entities_str}
 ```
 
------Relationships(KG)-----
+Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
 ```
 
------Document Chunks(DC)-----
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
 
 ```json
 []
@@ -5014,23 +5024,25 @@ async def _build_query_context(
         relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
         chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-        entities_str = json.dumps(entities_for_llm, ensure_ascii=False)
-        relations_str = json.dumps(relations_for_llm, ensure_ascii=False)
-        text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
+        # Format: one JSON object per line (LightRAG style)
+        entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_llm])
+        relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_llm])
+        text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
 
-        result = """-----Entities(KG)-----
+        result = f"""
+Knowledge Graph Data (Entity):
 
 ```json
 {entities_str}
 ```
 
------Relationships(KG)-----
+Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
 ```
 
------Document Chunks(DC)-----
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
 
 ```json
 {text_units_str}
