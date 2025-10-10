@@ -94,3 +94,5 @@ GEMINI.md
 hipporag2.txt
 benchmark.txt
 plan.txt
+query_mistral.py
+pipeline.txt
