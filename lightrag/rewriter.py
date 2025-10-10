@@ -5,6 +5,7 @@ import os
 import config
 client = OpenAI(
     api_key=os.environ["OPENAI_API_KEY"],
+    base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
 )
 
 # 使用 LLM 改寫 Query（將時間相關模糊詞換成精確時間）

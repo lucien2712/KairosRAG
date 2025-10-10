@@ -9,6 +9,7 @@ from .prompt import PROMPTS
 # Initialize OpenAI client
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
+    base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
 )
 
 
@@ -308,7 +309,10 @@ async def _batch_recognize_combined(
     2. 並行處理所有 orphan entity batches
     3. 合併所有結果
     """
-    client = OpenAI()
+    client = OpenAI(
+        api_key=os.environ.get("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+    )
 
     # 為 relations 創建 ID 映射
     id_mapping = {}

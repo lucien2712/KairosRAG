@@ -3075,6 +3075,7 @@ class LightRAG:
         llm = ChatOpenAI(
             model=self.tool_llm_model_name,
             api_key=os.getenv("OPENAI_API_KEY"),
+            base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
         )
         print(f"LLM initialized: {self.tool_llm_model_name}")
         
@@ -3887,7 +3888,7 @@ class LightRAG:
         """Create OpenAI client using environment variable."""
         try:
             import openai
-            return openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
+            return openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"], base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"))
         except ImportError:
             raise ImportError("Please install openai package: pip install openai")
         except KeyError:

@@ -2760,11 +2760,11 @@ def _calculate_relevance_scores_vectorized(
         0.2 * decay
     )
     """
-    0.45 * ll_similarities + 
+    0.35 * ll_similarities + 
         0.45 * hl_similarities + 
         0.1 * decay
     """
-    
+
     return final_scores.tolist()
 
 
@@ -5727,5 +5727,3 @@ async def naive_query(
         )
 
     return response
-
-
