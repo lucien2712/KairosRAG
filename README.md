@@ -62,12 +62,12 @@ $$R_{final} = \text{merge}(R_{multihop}, R_{ppr}, R_{fastrp})$$
 
 Graph traversal that expands from seed entities through neighbors, scoring candidates by entity-query similarity and relationship-query similarity.
 
-$$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^h$$
+$$S_{multihop}(e, q, h) = \alpha \cdot sim_{entity}(e, q) + \beta \cdot sim_{relation}(r, q) + \gamma \cdot \delta^{h-1}$$
 
 where:
 - $\alpha = 0.4$ (entity similarity weight)
-- $\beta = 0.4$ (relationship similarity weight)
-- $\gamma = 0.02$ (distance decay weight)
+- $\beta = 0.5$ (relationship similarity weight)
+- $\gamma = 0.1$ (distance decay weight)
 - $\delta = 0.8$ (decay factor per hop)
 - $h$ = hop count (distance from seed entities)
 
@@ -112,8 +112,8 @@ result = rag.entity_type_aug(texts=documents, force_refresh=True)
 
 ### ⚡ **Agentic Entity Canonicalization**
 
-* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision, especially when Adaptive FastRP/PPR compute embeddings before entity merging.
-* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion** to ensure Adaptive FastRP/PPR operate on cleaned entity graphs.
+* **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
+* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion**.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Mathematical Framework:**
