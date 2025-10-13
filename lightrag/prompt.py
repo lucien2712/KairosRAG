@@ -574,8 +574,10 @@ You are an expert in Named Entity Recognition (NER) with expertise across multip
 }
 ]
 
-## Example:
-### Current Entity Types:
+## Examples:
+
+### Example 1: Academic Research Document
+#### Current Entity Types:
 [
     {
         "entity_type": "organization",
@@ -587,10 +589,10 @@ You are an expert in Named Entity Recognition (NER) with expertise across multip
     }
 ]
 
-### Document Content:
+#### Document Content:
 The research team at MIT conducted a systematic review of machine learning algorithms, analyzing 150 datasets from 2020-2024. The study employed cross-validation techniques and achieved an accuracy of 94.2% using deep neural networks. Results were published in Nature Machine Intelligence.
 
-### Suggested New Entity Types:
+#### Suggested New Entity Types:
 [
     {
         "entity_type": "research_method",
@@ -603,6 +605,50 @@ The research team at MIT conducted a systematic review of machine learning algor
     {
         "entity_type": "publication",
         "explanation": "Academic publications, journals, and research outputs (e.g., 'Nature Machine Intelligence', 'conference proceedings')."
+    }
+]
+
+### Example 2: Financial Report Document
+#### Current Entity Types:
+[
+    {
+        "entity_type": "organization",
+        "explanation": "An entity representing organizations, companies, or institutions."
+    },
+    {
+        "entity_type": "person",
+        "explanation": "An entity representing individual persons."
+    },
+    {
+        "entity_type": "geo",
+        "explanation": "An entity representing geographical locations."
+    }
+]
+
+#### Document Content:
+Apple Inc. released its Q3 2024 earnings report on July 31, 2024. The company reported revenue of $85.8 billion, up 5% year-over-year. iPhone sales contributed $39.3 billion, while Services revenue grew to $24.2 billion. CEO Tim Cook highlighted strong performance in emerging markets, particularly India and Southeast Asia. The company's operating margin improved to 27.5%, and net income reached $21.4 billion. Apple also announced a $110 billion share buyback program. The Greater China region faced challenges with revenue declining 6.5% to $14.7 billion due to increased competition.
+
+#### Suggested New Entity Types:
+[
+    {
+        "entity_type": "financial_metric",
+        "explanation": "Financial measurements and performance indicators including revenue, profit, margins, growth rates, and monetary values (e.g., '$85.8 billion revenue', '5% year-over-year', '27.5% operating margin')."
+    },
+    {
+        "entity_type": "product_line",
+        "explanation": "Product categories, business segments, or service offerings that contribute to company revenue (e.g., 'iPhone sales', 'Services revenue')."
+    },
+    {
+        "entity_type": "temporal_range",
+        "explanation": "Time periods including fiscal quarters, years, and reporting periods (e.g., 'Q3 2024', 'July 31, 2024', 'year-over-year')."
+    },
+    {
+        "entity_type": "corporate_action",
+        "explanation": "Strategic business actions and initiatives taken by organizations (e.g., '$110 billion share buyback program', 'market expansion', 'acquisitions')."
+    },
+    {
+        "entity_type": "market_region",
+        "explanation": "Geographical markets or regions with business performance context (e.g., 'Greater China region', 'emerging markets', 'India and Southeast Asia')."
     }
 ]
 """
