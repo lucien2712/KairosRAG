@@ -896,6 +896,7 @@ class LightRAG:
         track_id: str | None = None,
         agentic_merging: bool = False,
         agentic_merging_threshold: float = 0.8,
+        merging_iteration: int = 3,
     ) -> str:
         """Sync Insert documents with checkpoint support
 
@@ -911,6 +912,7 @@ class LightRAG:
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
             agentic_merging: whether to perform agentic entity merging after document processing
             agentic_merging_threshold: similarity threshold for agentic merging (default: 0.8)
+            merging_iteration: maximum number of merging iterations for multi-pass merging (default: 3)
 
         Returns:
             str: tracking ID for monitoring processing status
@@ -927,6 +929,7 @@ class LightRAG:
                 track_id,
                 agentic_merging,
                 agentic_merging_threshold,
+                merging_iteration,
             )
         )
 
@@ -941,6 +944,7 @@ class LightRAG:
         track_id: str | None = None,
         agentic_merging: bool = False,
         agentic_merging_threshold: float = 0.8,
+        merging_iteration: int = 3,
     ) -> str:
         """Async Insert documents with checkpoint support
 
@@ -956,6 +960,7 @@ class LightRAG:
             track_id: tracking ID for monitoring processing status, if not provided, will be generated
             agentic_merging: whether to perform agentic entity merging after document processing
             agentic_merging_threshold: similarity threshold for agentic merging (default: 0.8)
+            merging_iteration: maximum number of merging iterations for multi-pass merging (default: 3)
 
         Returns:
             str: tracking ID for monitoring processing status
@@ -972,10 +977,13 @@ class LightRAG:
         # Handle FastRP and PPR computation based on agentic_merging setting
         if agentic_merging:
             # Flow 2: insert → agentic merging → FastRP & PPR
-            logger.info(f"Starting agentic entity merging with threshold {agentic_merging_threshold}")
-            merge_result = await self.aagentic_merging(threshold=agentic_merging_threshold)
+            logger.info(f"Starting agentic entity merging with threshold {agentic_merging_threshold}, max iterations {merging_iteration}")
+            merge_result = await self.aagentic_merging(
+                threshold=agentic_merging_threshold,
+                max_iterations=merging_iteration
+            )
             # logger.info(f"Agentic merging completed: {merge_result}")
-            
+
             # Compute FastRP and PPR after entity merging
             await self._compute_node_embeddings()
         else:
@@ -2967,18 +2975,99 @@ class LightRAG:
             )
         )
 
-    def agentic_merging(self, threshold: float = 0.8) -> dict:
+    async def aagentic_merging(
+        self,
+        threshold: float = 0.8,
+        max_iterations: int = 3
+    ) -> dict:
         """
-        Perform intelligent entity merging using vector similarity and LLM decision making.
-        
+        Multi-pass agentic merging with early stopping.
+
+        Executes multiple rounds of entity merging to handle transitive relationships.
+        After each merge, entities are updated and may become similar enough to merge
+        with other entities in subsequent iterations.
+
         Args:
             threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
-            
+            max_iterations: Maximum number of merging iterations (default: 3)
+
+        Returns:
+            dict: Aggregated statistics about the merging process across all iterations
+        """
+        import time as time_module
+
+        start_time = time_module.time()
+        all_iterations = []
+        total_merged = 0
+        total_llm_evaluated = 0
+        total_entities_summarized = 0
+        total_relations_summarized = 0
+
+        for iteration in range(max_iterations):
+            print(f"\n{'='*70}")
+            print(f"  Agentic Merging: Iteration {iteration + 1}/{max_iterations}")
+            print(f"{'='*70}")
+
+            # Execute single pass merge
+            result = await self._single_pass_agentic_merging(threshold)
+
+            # Record results
+            all_iterations.append(result)
+            total_merged += result["merged_pairs"]
+            total_llm_evaluated += result["llm_evaluated_pairs"]
+
+            if "entities_summarized" in result:
+                total_entities_summarized += result["entities_summarized"]
+            if "relations_summarized" in result:
+                total_relations_summarized += result["relations_summarized"]
+
+            # Early stopping: no new merges
+            if result["merged_pairs"] == 0:
+                print(f"\n✓ Converged after {iteration + 1} iteration(s)")
+                print(f"  Reason: No new merges found in this iteration")
+                break
+
+        total_time = time_module.time() - start_time
+
+        # Aggregate final statistics
+        final_result = {
+            "total_entities": all_iterations[0]["total_entities"],
+            "remaining_entities": all_iterations[-1]["remaining_entities"],
+            "total_merged_pairs": total_merged,
+            "total_llm_evaluated_pairs": total_llm_evaluated,
+            "total_entities_summarized": total_entities_summarized,
+            "total_relations_summarized": total_relations_summarized,
+            "iterations_completed": len(all_iterations),
+            "iterations_requested": max_iterations,
+            "converged": all_iterations[-1]["merged_pairs"] == 0,
+            "total_time": total_time,
+            "similarity_threshold": threshold,
+            "per_iteration_stats": all_iterations,
+        }
+
+        # Print summary
+        print(f"\n{'='*70}")
+        print(f"  Multi-pass Merging Summary")
+        print(f"{'='*70}")
+        print(f"  Initial entities:        {final_result['total_entities']}")
+        print(f"  Final entities:          {final_result['remaining_entities']}")
+        print(f"  Iterations:              {len(all_iterations)}/{max_iterations}")
+
+        return final_result
+
+    def agentic_merging(self, threshold: float = 0.8, max_iterations: int = 3) -> dict:
+        """
+        Perform multi-pass intelligent entity merging using vector similarity and LLM decision making.
+
+        Args:
+            threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
+            max_iterations: Maximum number of merging iterations (default: 3)
+
         Returns:
             dict: Statistics about the merging process
         """
         loop = always_get_an_event_loop()
-        return loop.run_until_complete(self.aagentic_merging(threshold))
+        return loop.run_until_complete(self.aagentic_merging(threshold, max_iterations))
 
     async def aexport_data(
         self,
@@ -3037,7 +3126,7 @@ class LightRAG:
             self.aexport_data(output_path, file_format, include_vector_data)
         )
 
-    async def aagentic_merging(self, threshold: float = 0.8) -> dict:
+    async def _single_pass_agentic_merging(self, threshold: float = 0.8) -> dict:
         """
         Asynchronously perform intelligent entity merging using vector similarity and LLM decision making.
         
@@ -3079,6 +3168,30 @@ class LightRAG:
         )
         print(f"LLM initialized: {self.tool_llm_model_name}")
         
+        # Import summarization function
+        from .operate import _handle_entity_relation_summary
+
+        # Build global_config for summarization
+        global_config = {
+            "tokenizer": self.tokenizer,
+            "summary_context_size": self.summary_context_size,
+            "summary_max_tokens": self.summary_max_tokens,
+            "force_llm_summary_on_merge": self.force_llm_summary_on_merge,
+            "summary_length_recommended": self.summary_length_recommended,
+            "llm_model_func": self.llm_model_func,
+            "addon_params": {
+                "language": "English"  # Default language, can be made configurable
+            }
+        }
+
+        # Statistics tracking for summarization
+        summarization_stats = {
+            "entities_summarized": 0,
+            "relations_summarized": 0,
+            "entity_llm_calls": 0,
+            "relation_llm_calls": 0
+        }
+
         # Define the merge tool for LLM
         @tool
         async def merge_entities_tool(a_entity_id: str, b_entity_id: str) -> str:
@@ -3088,6 +3201,7 @@ class LightRAG:
             try:
                 # print(f"TOOL CALLED: Merging {b_entity_id} -> {a_entity_id}")
 
+                # Step 1: Perform merge with concatenation
                 await self.amerge_entities(
                     source_entities=[a_entity_id, b_entity_id],
                     target_entity=a_entity_id,
@@ -3099,6 +3213,97 @@ class LightRAG:
                         "file_path": "join_unique",
                     },
                 )
+
+                # Step 2: Summarize merged entity description using same logic as normal insertion
+                merged_node = await self.chunk_entity_relation_graph.get_node(a_entity_id)
+                if merged_node and 'description' in merged_node and merged_node['description']:
+                    description_list = merged_node['description'].split('\n\n')
+
+                    # Use the same summarization logic as normal entity insertion
+                    summarized_desc, llm_used = await _handle_entity_relation_summary(
+                        description_type="Entity",
+                        entity_or_relation_name=a_entity_id,
+                        description_list=description_list,
+                        global_config=global_config,
+                        llm_response_cache=self.llm_response_cache,
+                        seperator="\n\n"
+                    )
+
+                    # Update entity if description changed
+                    if summarized_desc != merged_node['description']:
+                        # Update graph storage
+                        await self.chunk_entity_relation_graph.upsert_node(
+                            a_entity_id,
+                            {'description': summarized_desc}
+                        )
+
+                        # Update vector database
+                        from .utils import compute_mdhash_id
+                        entity_vdb_id = compute_mdhash_id(a_entity_id, prefix="ent-")
+                        entity_content = f"{a_entity_id}\n{summarized_desc}"
+
+                        await self.entities_vdb.upsert(
+                            {entity_vdb_id: {
+                                "content": entity_content,
+                                "entity_name": a_entity_id
+                            }}
+                        )
+
+                        summarization_stats["entities_summarized"] += 1
+                        if llm_used:
+                            summarization_stats["entity_llm_calls"] += 1
+
+                # Step 3: Summarize all related relationship descriptions
+                # Get all edges connected to the merged entity
+                edge_tuples = await self.chunk_entity_relation_graph.get_node_edges(a_entity_id)
+
+                if edge_tuples:
+                    for src_id, tgt_id in edge_tuples:
+                        # Get the full edge data
+                        edge = await self.chunk_entity_relation_graph.get_edge(src_id, tgt_id)
+
+                        if edge and 'description' in edge:
+                            description = edge['description']
+                            description_list = description.split('\n\n')
+
+                            # Use same summarization logic for relationships
+                            summarized_desc, llm_used = await _handle_entity_relation_summary(
+                                description_type="Relationship",
+                                entity_or_relation_name=f"{src_id} -> {tgt_id}",
+                                description_list=description_list,
+                                global_config=global_config,
+                                llm_response_cache=self.llm_response_cache,
+                                seperator="\n\n"
+                            )
+
+                            # Update relationship if description changed
+                            if summarized_desc != description:
+                                # Update graph storage
+                                updated_edge_data = dict(edge)
+                                updated_edge_data['description'] = summarized_desc
+                                await self.chunk_entity_relation_graph.upsert_edge(
+                                    src_id,
+                                    tgt_id,
+                                    updated_edge_data
+                                )
+
+                                # Update vector database
+                                from .utils import compute_mdhash_id
+                                rel_vdb_id = compute_mdhash_id(src_id + tgt_id, prefix="rel-")
+                                keywords = edge.get('keywords', '')
+                                rel_content = f"{keywords}\t{src_id}\n{tgt_id}\n{summarized_desc}"
+
+                                await self.relationships_vdb.upsert(
+                                    {rel_vdb_id: {
+                                        "src_id": src_id,
+                                        "tgt_id": tgt_id,
+                                        "content": rel_content
+                                    }}
+                                )
+
+                                summarization_stats["relations_summarized"] += 1
+                                if llm_used:
+                                    summarization_stats["relation_llm_calls"] += 1
 
                 # print(f"TOOL COMPLETED: Merge {b_entity_id} -> {a_entity_id}")
                 return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
@@ -3345,26 +3550,17 @@ class LightRAG:
                             continue
 
                         # Both entities exist, proceed with cached merge
-                        # Temporarily suppress merge operation logs
-                        import logging
-                        merge_logger = logging.getLogger('lightrag.utils_graph')
-                        original_level = merge_logger.level
-                        merge_logger.setLevel(logging.CRITICAL)  # Suppress INFO logs
+                        # Use merge_entities_tool to ensure summarization is applied
+                        result = await merge_entities_tool.ainvoke({
+                            "a_entity_id": entity_a['entity_id'],
+                            "b_entity_id": entity_b['entity_id']
+                        })
 
-                        self.merge_entities(
-                            source_entities=[entity_a['entity_id'], entity_b['entity_id']],
-                            target_entity=entity_a['entity_id'],
-                            merge_strategy={
-                                "created_at": "keep_last",
-                                "description": "concatenate",
-                                "entity_type": "keep_first",
-                                "source_id": "join_unique",
-                                "file_path": "join_unique",
-                            },
-                        )
-
-                        # Restore original log level
-                        merge_logger.setLevel(original_level)
+                        # Update entities list with the new merged description
+                        # This is critical for transitive merges (e.g., A←B, then A←C)
+                        updated_node = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
+                        if updated_node and 'description' in updated_node:
+                            entities[i]['description'] = updated_node['description']
 
                         active_entities.discard(j)
                         merged_pairs += 1
@@ -3413,6 +3609,12 @@ class LightRAG:
                                 break
 
                     if merge_successful:
+                        # Update entities list with the new merged description
+                        # This is critical for transitive merges (e.g., A←B, then A←C)
+                        updated_node = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
+                        if updated_node and 'description' in updated_node:
+                            entities[i]['description'] = updated_node['description']
+
                         # Mark entity B as inactive after successful merge
                         active_entities.discard(j)
                         merged_pairs += 1
@@ -3459,7 +3661,11 @@ class LightRAG:
             "remaining_entities": remaining_entities,
             "processing_time": processing_time,
             "similarity_threshold": threshold,
-            "total_cached_pairs": len(entity_pair_cache)
+            "total_cached_pairs": len(entity_pair_cache),
+            "entities_summarized": summarization_stats["entities_summarized"],
+            "relations_summarized": summarization_stats["relations_summarized"],
+            "entity_summarization_llm_calls": summarization_stats["entity_llm_calls"],
+            "relation_summarization_llm_calls": summarization_stats["relation_llm_calls"]
         }
 
         # Ensure all merge operations are fully completed before finishing
