@@ -2751,18 +2751,18 @@ def _calculate_relevance_scores_vectorized(
                         hl_similarities[original_idx] = cosine_sims[j]
     
     # 3. Vectorized distance decay calculation
-    decay = 0.8 ** current_hop
+    decay = 0.8 ** (current_hop - 1)
     
     # 4. Vectorized final score computation
     final_scores = (
-        0.25 * ll_similarities + 
-        0.35 * hl_similarities + 
-        0.2 * decay
+        0.4 * ll_similarities + 
+        0.5 * hl_similarities + 
+        0.1 * decay
     )
     """
     0.35 * ll_similarities + 
         0.45 * hl_similarities + 
-        0.1 * decay
+        0.2 * decay
 
       0.4 * ll_similarities + 
         0.4 * hl_similarities + 
@@ -3577,7 +3577,7 @@ async def extract_keywords_only(
         f"[extract_keywords] Sending to LLM: {len_of_prompts:,} tokens (Prompt: {len_of_prompts})"
     )
 
-    # 5. Call the LLM for keyword extraction
+    # 5. Call the LLM for keyword extraction with retry mechanism
     if param.model_func:
         use_model_func = param.model_func
     else:
@@ -3585,22 +3585,44 @@ async def extract_keywords_only(
         # Apply higher priority (5) to query relation LLM function
         use_model_func = partial(use_model_func, _priority=5)
 
-    result = await use_model_func(kw_prompt, keyword_extraction=True)
+    # Retry until we get a valid dict response (max 3 attempts)
+    max_retries = 3
+    hl_keywords = []
+    ll_keywords = []
 
-    # 6. Parse out JSON from the LLM response
-    result = remove_think_tags(result)
-    try:
-        keywords_data = json_repair.loads(result)
-        if not keywords_data:
-            logger.error("No JSON-like structure found in the LLM respond.")
-            return [], []
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parsing error: {e}")
-        logger.error(f"LLM respond: {result}")
+    for attempt in range(max_retries):
+        result = await use_model_func(kw_prompt, keyword_extraction=True)
+
+        # 6. Parse out JSON from the LLM response
+        result = remove_think_tags(result)
+        try:
+            keywords_data = json_repair.loads(result)
+            if not keywords_data:
+                logger.warning(f"Attempt {attempt + 1}/{max_retries}: No JSON-like structure found in LLM response.")
+                continue
+
+            # Check if we got a dict (correct format)
+            if isinstance(keywords_data, dict):
+                hl_keywords = keywords_data.get("high_level_keywords", [])
+                ll_keywords = keywords_data.get("low_level_keywords", [])
+                if hl_keywords or ll_keywords:
+                    logger.info(f"Successfully extracted keywords on attempt {attempt + 1}")
+                    break
+                else:
+                    logger.warning(f"Attempt {attempt + 1}/{max_retries}: Dict returned but no keywords found.")
+                    continue
+            else:
+                logger.warning(f"Attempt {attempt + 1}/{max_retries}: LLM returned {type(keywords_data).__name__} instead of dict, retrying...")
+                continue
+
+        except json.JSONDecodeError as e:
+            logger.warning(f"Attempt {attempt + 1}/{max_retries}: JSON parsing error: {e}")
+            continue
+
+    # If all retries failed, return empty lists
+    if not hl_keywords and not ll_keywords:
+        logger.error(f"Failed to extract keywords after {max_retries} attempts, returning empty keywords.")
         return [], []
-
-    hl_keywords = keywords_data.get("high_level_keywords", [])
-    ll_keywords = keywords_data.get("low_level_keywords", [])
 
     # 7. Cache only the processed keywords with cache type
     if hl_keywords or ll_keywords:
