@@ -141,7 +141,7 @@ $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 
 - **Removal Decision Function:**
 
-$$R(e_i) = \mathbb{I}[LLM_{confidence}("Irrelevant\ to\ query?", context(q, e_i)) > 0.95]$$
+$$R(e_i) = \mathbb{I}[LLM_{confidence}("Irrelevant\ to\ query?", context(q, e_i))]$$
 
 where $q$ = user query, $e_i$ = entity/relation
 
