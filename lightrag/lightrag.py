@@ -895,8 +895,8 @@ class LightRAG:
         timestamps: str | list[str] | None = None,
         track_id: str | None = None,
         agentic_merging: bool = False,
-        agentic_merging_threshold: float = 0.8,
-        merging_iteration: int = 3,
+        agentic_merging_threshold: float = 0.7,
+        merging_iteration: int = 5,
     ) -> str:
         """Sync Insert documents with checkpoint support
 
@@ -4101,80 +4101,110 @@ class LightRAG:
             raise ValueError("OPENAI_API_KEY environment variable is not set")
 
     async def _process_file_with_llm(self, file_content: str, current_entity_types: list) -> list:
-        """Process a file with LLM to suggest new entity types."""
-        try:
-            from .prompt import PROMPTS
-            
-            client = self._create_openai_client()
-            current_entity_types_json = json.dumps(
-                [et["entity_type"] for et in current_entity_types]
-            )
-            
-            response = client.chat.completions.create(
-                model=self.tool_llm_model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": PROMPTS["entity_type_suggestion_system"],
-                    },
-                    {
-                        "role": "user",
-                        "content": PROMPTS["entity_type_suggestion_user"].format(
-                            current_entity_types=current_entity_types_json,
-                            file_content=file_content
-                        ),
-                    },
-                ],
-            )
-            
-            llm_response = response.choices[0].message.content
-            suggested_types = self._extract_json_from_response(llm_response)
-            logger.info(f"LLM suggested {len(suggested_types) if suggested_types else 0} new entity types")
-            return suggested_types if suggested_types else []
-            
-        except Exception as e:
-            logger.error(f"Error processing file with LLM: {e}")
-            return []
+        """Process a file with LLM to suggest new entity types with retry mechanism."""
+        from .prompt import PROMPTS
+
+        max_retries = 3
+        client = self._create_openai_client()
+        current_entity_types_json = json.dumps(
+            [et["entity_type"] for et in current_entity_types]
+        )
+
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self.tool_llm_model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": PROMPTS["entity_type_suggestion_system"],
+                        },
+                        {
+                            "role": "user",
+                            "content": PROMPTS["entity_type_suggestion_user"].format(
+                                current_entity_types=current_entity_types_json,
+                                file_content=file_content
+                            ),
+                        },
+                    ],
+                )
+
+                llm_response = response.choices[0].message.content
+                suggested_types = self._extract_json_from_response(llm_response)
+
+                # Check if we got valid results (non-empty list)
+                if suggested_types and isinstance(suggested_types, list):
+                    logger.info(f"Successfully extracted {len(suggested_types)} entity types on attempt {attempt + 1}")
+                    return suggested_types
+                else:
+                    logger.warning(f"Attempt {attempt + 1}/{max_retries}: No valid entity types extracted, retrying...")
+                    continue
+
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1}/{max_retries}: Error processing file with LLM: {e}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    logger.error(f"Failed to process file after {max_retries} attempts")
+                    return []
+
+        # If all retries failed
+        logger.error(f"Failed to extract entity types after {max_retries} attempts, returning empty list")
+        return []
 
     async def _refine_entity_types(self, entity_types: list) -> list:
-        """Use LLM to remove duplicates and refine entity types."""
-        try:
-            from .prompt import PROMPTS
-            
-            client = self._create_openai_client()
-            
-            response = client.chat.completions.create(
-                model=self.tool_llm_model_name,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": PROMPTS["entity_type_refinement_system"],
-                    },
-                    {
-                        "role": "user",
-                        "content": PROMPTS["entity_type_refinement_user"].format(
-                            entity_types=json.dumps(entity_types, ensure_ascii=False, indent=2)
-                        ),
-                    },
-                ],
-            )
-            
-            response_content = response.choices[0].message.content
-            refined_entity_types = self._extract_json_from_response(response_content)
-            
-            if refined_entity_types:
-                logger.info(f"LLM refined {len(entity_types)} entity types down to {len(refined_entity_types)}")
-                return refined_entity_types
-            else:
-                logger.warning("LLM refinement failed, returning original entity types")
-                return entity_types
-                
-        except Exception as e:
-            logger.error(f"Error refining entity types with LLM: {e}")
-            return entity_types
+        """Use LLM to remove duplicates and refine entity types with retry mechanism."""
+        from .prompt import PROMPTS
+
+        max_retries = 3
+        client = self._create_openai_client()
+        entity_types_json = json.dumps(entity_types, ensure_ascii=False, indent=2)
+
+        for attempt in range(max_retries):
+            try:
+                response = client.chat.completions.create(
+                    model=self.tool_llm_model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": PROMPTS["entity_type_refinement_system"],
+                        },
+                        {
+                            "role": "user",
+                            "content": PROMPTS["entity_type_refinement_user"].format(
+                                entity_types=entity_types_json
+                            ),
+                        },
+                    ],
+                )
+
+                response_content = response.choices[0].message.content
+                refined_entity_types = self._extract_json_from_response(response_content)
+
+                # Check if we got valid results (non-empty list)
+                if refined_entity_types and isinstance(refined_entity_types, list):
+                    logger.info(f"Successfully refined {len(entity_types)} entity types down to {len(refined_entity_types)} on attempt {attempt + 1}")
+                    return refined_entity_types
+                else:
+                    logger.warning(f"Attempt {attempt + 1}/{max_retries}: No valid refined types extracted, retrying...")
+                    continue
+
+            except Exception as e:
+                logger.warning(f"Attempt {attempt + 1}/{max_retries}: Error refining entity types: {e}")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    logger.error(f"Failed to refine entity types after {max_retries} attempts, returning original")
+                    return entity_types
+
+        # If all retries failed, return original entity types
+        logger.warning(f"LLM refinement failed after {max_retries} attempts, returning original entity types")
+        return entity_types
 
     def _extract_json_from_response(self, response_content: str) -> list:
-        """Extract JSON from LLM response."""
+        """Extract JSON from LLM response using json_repair for robustness."""
+        import json_repair
+
         try:
             json_start = (
                 response_content.find("[")
@@ -4186,17 +4216,30 @@ class LightRAG:
                 if "]" in response_content
                 else response_content.rfind("}") + 1
             )
-            
+
             if json_start != -1 and json_end != -1:
                 json_str = response_content[json_start:json_end]
                 logger.debug(f"Extracted JSON string: {json_str[:200]}...")
-                return json.loads(json_str)
-                
+
+                # Use json_repair for robust parsing
+                result = json_repair.loads(json_str)
+
+                # Ensure result is a list
+                if isinstance(result, list):
+                    return result
+                elif isinstance(result, dict):
+                    # If single dict returned, wrap in list
+                    return [result]
+                else:
+                    logger.warning(f"Unexpected JSON type: {type(result)}")
+                    return []
+
             logger.warning("No valid JSON found in LLM response")
             return []
-            
+
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
+            logger.error(f"Problematic response: {response_content[:500]}")
             return []
         except Exception as e:
             logger.error(f"Unexpected error extracting JSON: {e}")

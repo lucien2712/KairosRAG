@@ -4116,7 +4116,7 @@ async def _build_query_context(
                     # Only add timestamp field if it exists and is not empty
                     timestamp = chunk.get("timestamp", "")
                     if timestamp:
-                        chunk_context["The content is from"] = timestamp
+                        chunk_context["The content is occured at"] = timestamp
                     text_units_context.append(chunk_context)
             except Exception as e:
                 logger.warning(f"Failed to process initial chunks: {e}")
@@ -4130,7 +4130,7 @@ async def _build_query_context(
                     # Only add timestamp field if it exists and is not empty
                     timestamp = chunk.get("timestamp", "")
                     if timestamp:
-                        chunk_context["The content is from"] = timestamp
+                        chunk_context["The content is occured at"] = timestamp
                     text_units_context.append(chunk_context)
 
     # not necessary to use LLM to generate a response
@@ -4713,7 +4713,7 @@ Document Chunks (Each entry has a reference_id refer to the `Reference Document 
                 # Only add timestamp field if it exists and is not empty
                 timestamp = chunk.get("timestamp", "")
                 if timestamp:
-                    chunk_context["The content is from"] = timestamp
+                    chunk_context["The content is occured at"] = timestamp
                 text_units_context.append(chunk_context)
             
             # logger.info(
@@ -4910,7 +4910,7 @@ Document Chunks (Each entry has a reference_id refer to the `Reference Document 
                 # Only add timestamp field if it exists and is not empty
                 timestamp = chunk.get("timestamp", "")
                 if timestamp:
-                    chunk_context["The content is from"] = timestamp
+                    chunk_context["The content is occured at"] = timestamp
                 text_units_context.append(chunk_context)
             
             logger.info(
@@ -5670,7 +5670,7 @@ async def naive_query(
                 "id": i + 1,
                 "content": chunk["content"],
                 "file_path": chunk.get("file_path", "unknown_source"),
-                "The content is from": chunk.get("timestamp", ""),
+                "The content is occured at": chunk.get("timestamp", ""),
             }
         )
 
