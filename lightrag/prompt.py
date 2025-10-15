@@ -676,21 +676,21 @@ PROMPTS["entity_type_refinement_system"] = """
 You are an advanced linguistic assistant with expertise in Named Entity Recognition (NER) across multiple domains.
 
 ## Task:
-Refine a list of entity types by aggressively removing duplicates or semantically overlapping types, ensuring a concise and well-optimized schema.
+Refine a list of entity types by removing clear duplicates or highly overlapping types, ensuring a balanced and well-optimized schema that preserves domain-specific granularity.
 
 ## Critical Requirements:
-- **STRICT CONSOLIDATION**: Aggressively merge similar or overlapping entity types
-- **QUALITY OVER QUANTITY**: Aim for the minimum number of entity types that provide maximum coverage
-- **HIERARCHICAL MERGING**: Merge child types into broader parent categories when possible
-- **NO REDUNDANCY**: Remove any types that can be represented by existing types
-- **DOMAIN FOCUS**: Keep only entity types that are essential for the specific document domain
+- **BALANCED CONSOLIDATION**: Merge only clearly redundant or highly overlapping entity types
+- **QUALITY AND COVERAGE**: Aim for a concise schema that maintains domain-specific distinctions
+- **HIERARCHICAL AWARENESS**: Merge child types into parent categories only when the distinction lacks value
+- **REDUCE REDUNDANCY**: Remove types that are true duplicates or near-synonyms
+- **DOMAIN PRESERVATION**: Maintain entity types that capture domain-specific knowledge and semantic distinctions
 
 ## Consolidation Guidelines:
-1. **Merge Overlapping Types**: Combine types with >70% semantic overlap (e.g., "Company" + "Organization" → "Organization")
-2. **Eliminate Sub-types**: Remove specific sub-types if parent type exists (e.g., "CEO" → "Person", "Apple Inc." → "Organization")
+1. **Merge Clear Duplicates**: Combine types with semantic overlap (e.g., "Company" + "Corporation" + "Organization" -> "Organization")
+2. **Eliminate True Sub-types**: Remove specific sub-types only if they don't add domain value (e.g., "CEO" -> "Person" if no role-specific analysis needed)
 3. **Remove Generic Types**: Eliminate vague types like "Concept", "Thing", "Item", "Other", "Unknown"
-4. **Combine Related Types**: Merge related types into broader categories (e.g., "Product" + "Service" → "Offering")
-5. **Preserve Core Types Only**: Keep only types that represent fundamentally different entity categories
+4. **Preserve Domain Distinctions**: Keep related types if they serve different analytical purposes (e.g., "Product" vs "Service" for business analysis)
+5. **Maintain Semantic Diversity**: Keep types that represent fundamentally different entity categories or domain-specific concepts
 
 ## Domain-Specific Considerations:
 - **Financial Documents**: Organization, Person, Financial_Metric, Temporal_Range 
@@ -771,31 +771,29 @@ PROMPTS["entity_type_refinement_user"] = """
 {entity_types}
 
 ## Task:
-**CRITICAL**: Aggressively consolidate this list to the minimum number of entity types needed.
+**Carefully consolidate this list** to remove clear duplicates while preserving domain-specific entity types.
 
 **Your Goals:**
-1. **Maximize Consolidation**: Merge as many similar types as possible
-2. **Eliminate Redundancy**: Remove any type that can be covered by another type
-3. **Preserve Coverage**: Ensure the final types still cover all important entity categories
+1. **Remove Clear Duplicates**: Merge only types that are true synonyms or near-duplicates
+2. **Eliminate Redundancy**: Remove types that are completely covered by another type without adding value
+3. **Preserve Domain Coverage**: Maintain types that capture distinct domain concepts or analytical purposes
 
 **Action Steps:**
-- Group semantically similar types together
-- For each group, select the most comprehensive type name
+- Identify true duplicates and near-synonyms (semantic overlap)
+- For duplicate groups, select the most appropriate type name
 - Merge explanations to reflect consolidated coverage
-- Remove sub-types that are covered by parent types
-- Eliminate generic or vague type names
+- Keep sub-types that provide valuable domain-specific distinctions
+- Eliminate only generic or vague type names (e.g., "Thing", "Other")
 
 **Quality Check:**
-- Can any two types be merged? If yes, merge them.
-- Is each type fundamentally different from others? If no, consolidate.
-- Does each type capture unique entities? If no, remove it.
+- Are these types true duplicates or near-synonyms? If yes, merge them.
+- Do these types serve different analytical or domain purposes? If yes, keep them separate.
+- Does this type add meaningful domain-specific information? If yes, preserve it.
 
 Please provide the refined list in strict JSON array format.
 """
 
 # Legacy single-filter prompts removed - now using recognition_filter
-
-
 PROMPTS["recognition_filter"] = """---Role---
 You are a conservative filter component in a comprehensive question-answering system. Your primary goal is to preserve information completeness while only removing clearly irrelevant items. The query may require supporting context, background information, and multi-hop reasoning chains.
 
