@@ -64,6 +64,95 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=".env", override=False)
 
 
+# ============================================================================
+# Context Formatting Functions
+# ============================================================================
+
+def format_chunks_markdown(chunks: list[dict]) -> str:
+    """Format chunks in Markdown format with dynamic field handling"""
+    lines = ["# Document Chunks\n"]
+    for i, chunk in enumerate(chunks, 1):
+        lines.append(f"#### Document Chunk {i}")
+        lines.append(f"- **File Path**: {chunk.get('file_path', 'unknown')}")
+
+        # Dynamic: only show timestamp if exists and non-empty
+        if chunk.get("The content is occured at"):
+            lines.append(f"- **The content is occurred at**: {chunk['The content is occured at']}")
+
+        lines.append(f"- **Content**: {chunk.get('content', '')}")
+        lines.append("")  # Empty line between chunks
+
+    return "\n".join(lines)
+
+
+def format_chunks_json(chunks: list[dict]) -> str:
+    """Format chunks in original JSON format"""
+    chunks_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks])
+    return f'''Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
+
+```json
+{chunks_str}
+```
+'''
+
+
+def format_entities_markdown(entities: list[dict]) -> str:
+    """Format entities in Markdown format"""
+    lines = ["# Knowledge Graph - Entities\n"]
+    for entity in entities:
+        name = entity.get('entity', '')
+        entity_type = entity.get('type', '')
+        desc = entity.get('description', '')
+
+        lines.append(f"#### Entity: {name}")
+        lines.append(f"- **Type**: {entity_type}")
+        lines.append(f"- **Description**: {desc}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_entities_json(entities: list[dict]) -> str:
+    """Format entities in original JSON format"""
+    entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities])
+    return f'''Knowledge Graph Data (Entity):
+
+```json
+{entities_str}
+```
+'''
+
+
+def format_relations_markdown(relations: list[dict]) -> str:
+    """Format relations in Markdown format with bidirectional arrow"""
+    lines = ["# Knowledge Graph - Relations\n"]
+    for relation in relations:
+        entity1 = relation.get('entity1', '')
+        entity2 = relation.get('entity2', '')
+        desc = relation.get('description', '')
+
+        lines.append(f"#### Relation: {entity1} <-> {entity2}")
+        lines.append(desc)
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def format_relations_json(relations: list[dict]) -> str:
+    """Format relations in original JSON format"""
+    relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations])
+    return f'''Knowledge Graph Data (Relationship):
+
+```json
+{relations_str}
+```
+'''
+
+
+# ============================================================================
+# Chunking Functions
+# ============================================================================
+
 def chunking_by_token_size(
     tokenizer: Tokenizer,
     content: str,
@@ -4207,31 +4296,17 @@ async def _build_query_context(
     relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
     chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-    # Format: one JSON object per line (LightRAG style)
-    entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_llm])
-    relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_llm])
-    text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
-
-    result = f"""
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-{text_units_str}
-```
-
-Knowledge Graph Data (Entity):
-
-```json
-{entities_str}
-```
-
-Knowledge Graph Data (Relationship):
-
-```json
-{relations_str}
-```
-
-"""
+    # Choose format based on query_param.context_format
+    if query_param.context_format == "markdown":
+        chunks_section = format_chunks_markdown(chunks_for_llm)
+        entities_section = format_entities_markdown(entities_for_llm)
+        relations_section = format_relations_markdown(relations_for_llm)
+        result = f"{chunks_section}\n{entities_section}\n{relations_section}"
+    else:  # json format
+        chunks_section = format_chunks_json(chunks_for_llm)
+        entities_section = format_entities_json(entities_for_llm)
+        relations_section = format_relations_json(relations_for_llm)
+        result = f"{chunks_section}\n{entities_section}\n{relations_section}"
     
     # Multi-hop expansion if enabled
     if query_param.max_hop > 0 and (entities_context or relations_context):
@@ -5108,35 +5183,17 @@ Knowledge Graph Data (Relationship):
         relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
         chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-        # Format: one JSON object per line (LightRAG style)
-        entities_str = '\n'.join([json.dumps(e, ensure_ascii=False) for e in entities_for_llm])
-        relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_llm])
-        text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
-
-        result = f"""
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-{text_units_str}
-```
-
-Knowledge Graph Data (Entity):
-
-```json
-{entities_str}
-```
-
-Knowledge Graph Data (Relationship):
-
-```json
-{relations_str}
-```
-
-""".format(
-            entities_str=entities_str,
-            relations_str=relations_str,
-            text_units_str=text_units_str,
-        )
+        # Choose format based on query_param.context_format
+        if query_param.context_format == "markdown":
+            chunks_section = format_chunks_markdown(chunks_for_llm)
+            entities_section = format_entities_markdown(entities_for_llm)
+            relations_section = format_relations_markdown(relations_for_llm)
+            result = f"{chunks_section}\n{entities_section}\n{relations_section}"
+        else:  # json format
+            chunks_section = format_chunks_json(chunks_for_llm)
+            entities_section = format_entities_json(entities_for_llm)
+            relations_section = format_relations_json(relations_for_llm)
+            result = f"{chunks_section}\n{entities_section}\n{relations_section}"
 
     return result
 
@@ -5738,9 +5795,18 @@ async def naive_query(
 
     # Remove id field before sending to LLM
     chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
-    text_units_str = json.dumps(chunks_for_llm, ensure_ascii=False)
+
+    # Format chunks based on context_format setting
+    if query_param.context_format == "markdown":
+        text_units_str = format_chunks_markdown(chunks_for_llm)
+    else:  # json format
+        text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
+
     if query_param.only_need_context:
-        return f"""
+        if query_param.context_format == "markdown":
+            return text_units_str
+        else:
+            return f"""
 ---Document Chunks(DC)---
 
 ```json

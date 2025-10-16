@@ -186,6 +186,12 @@ class QueryParam:
     recognition_batch_size: int = 10
     """Batch size for LLM recognition memory filtering. Default is 10."""
 
+    context_format: Literal["json", "markdown"] = "markdown"
+    """Format for presenting context to LLM. Options:
+    - "json": Original JSON format with code blocks
+    - "markdown": Markdown format with headers and lists (default)
+    """
+
 
 @dataclass
 class StorageNameSpace(ABC):
