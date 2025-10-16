@@ -2847,10 +2847,12 @@ async def _semantic_expansion_plus_structural_analysis(
     logger.info(f"Multi-hop found: {len(multihop_entities)} entities, {len(multihop_relations)} relations")
     logger.info(f"PPR found: {len(ppr_entities)} entities")
     logger.info(f"FastRP found: {len(fastrp_entities)} entities")
-    
-    # Find relations for PPR and FastRP entities
-    ppr_relations = await _find_relations_for_entities(ppr_entities, relationships_vdb)
-    fastrp_relations = await _find_relations_for_entities(fastrp_entities, relationships_vdb)
+
+    # Find relations for PPR and FastRP entities in parallel
+    ppr_relations, fastrp_relations = await asyncio.gather(
+        _find_relations_for_entities(ppr_entities, relationships_vdb),
+        _find_relations_for_entities(fastrp_entities, relationships_vdb)
+    )
     
     # Merge and deduplicate results from three sources
     merged_entities = _merge_three_way_entities(
@@ -2906,18 +2908,36 @@ async def _independent_ppr_analysis(
                         query_embedding = await embedding_func.func([ll_keywords])
                         query_vec = np.array(query_embedding[0])
 
-                        # Compute similarity scores for seed entities
+                        # Prepare entity strings for batch embedding
+                        entity_strs = []
+                        entity_str_mapping = {}  # Maps index to entity_name
+
                         for seed_entity in seed_entity_names:
-                            # Create entity string for embedding (matching multi-hop format)
                             seed_info = next((node for node in seed_nodes if node.get("entity_name") == seed_entity), None)
                             if seed_info and seed_info.get("entity_description"):
                                 entity_str = f"{seed_entity} {seed_info['entity_description']}"
-                                entity_embedding = await embedding_func.func([entity_str])
-                                entity_vec = np.array(entity_embedding[0])
+                                entity_str_mapping[len(entity_strs)] = seed_entity
+                                entity_strs.append(entity_str)
 
-                                # Compute cosine similarity
+                        if entity_strs:
+                            # Batch compute embeddings with concurrency control
+                            max_async = global_config.get("llm_model_max_async", 4)
+                            semaphore = asyncio.Semaphore(max_async)
+
+                            async def compute_with_limit(entity_str):
+                                async with semaphore:
+                                    return await embedding_func.func([entity_str])
+
+                            # Parallel embedding computation
+                            tasks = [compute_with_limit(entity_str) for entity_str in entity_strs]
+                            entity_embeddings = await asyncio.gather(*tasks)
+
+                            # Compute cosine similarities
+                            for idx, entity_embedding in enumerate(entity_embeddings):
+                                entity_vec = np.array(entity_embedding[0])
                                 similarity = cosine_similarity(query_vec, entity_vec)
-                                entity_similarities[seed_entity] = similarity
+                                entity_name = entity_str_mapping[idx]
+                                entity_similarities[entity_name] = similarity
 
                         logger.debug(f"Computed query-aware similarities for {len(entity_similarities)} seed entities")
 
@@ -2940,17 +2960,36 @@ async def _independent_ppr_analysis(
                         # Get all relations from knowledge graph
                         all_relations = await knowledge_graph_inst.get_all_relationships()
 
-                        # Compute similarity scores for all relations
+                        # Prepare relation strings for batch embedding
+                        rel_strs = []
+                        rel_str_mapping = {}  # Maps index to rel_keywords
+
                         for relation in all_relations:
                             rel_keywords = relation.get("keywords", "")
                             if rel_keywords.strip():
                                 # Create relation string for embedding (matching multi-hop format)
                                 rel_str = f"{rel_keywords}\t{relation.get('source_id', '')}\n{relation.get('target_id', '')}\n{relation.get('description', '')}"
-                                rel_embedding = await embedding_func.func([rel_str])
-                                rel_vec = np.array(rel_embedding[0])
+                                rel_str_mapping[len(rel_strs)] = rel_keywords
+                                rel_strs.append(rel_str)
 
-                                # Compute cosine similarity
+                        if rel_strs:
+                            # Batch compute embeddings with concurrency control
+                            max_async = global_config.get("llm_model_max_async", 4)
+                            semaphore = asyncio.Semaphore(max_async)
+
+                            async def compute_with_limit(rel_str):
+                                async with semaphore:
+                                    return await embedding_func.func([rel_str])
+
+                            # Parallel embedding computation
+                            tasks = [compute_with_limit(rel_str) for rel_str in rel_strs]
+                            rel_embeddings = await asyncio.gather(*tasks)
+
+                            # Compute cosine similarities
+                            for idx, rel_embedding in enumerate(rel_embeddings):
+                                rel_vec = np.array(rel_embedding[0])
                                 similarity = cosine_similarity(hl_query_vec, rel_vec)
+                                rel_keywords = rel_str_mapping[idx]
                                 relation_similarities[rel_keywords] = similarity
 
                         logger.debug(f"Computed query-aware relation similarities for {len(relation_similarities)} relations")
@@ -3038,42 +3077,52 @@ async def _independent_fastrp_analysis(
         # Get all entities for similarity calculation
         all_entity_names = list(node_embedding.fastrp_embeddings.keys())
         candidate_entities = [name for name in all_entity_names if name not in seed_entity_names]
-        
+
         if not candidate_entities:
             logger.warning("No candidate entities for FastRP analysis")
             return []
-        
-        # Calculate FastRP similarity for all candidates
-        smart_candidates = []
+
+        # Calculate FastRP similarity for all candidates (fast, using precomputed embeddings)
+        candidates_with_scores = []
         for entity_name in candidate_entities:
             try:
                 adaptive_fastrp_similarity = _compute_adaptive_fastrp_similarity(
                     entity_name, seed_entity_names, node_embedding
                 )
-                
-                # Get entity details from knowledge graph
-                entity_data = await knowledge_graph_inst.get_node(entity_name)
-                if entity_data:
-                    smart_candidates.append({
-                        "entity_name": entity_name,
-                        "adaptive_fastrp_similarity": adaptive_fastrp_similarity,
-                        "discovery_method": "fastrp_analysis",
-                        "rank": entity_data.get("degree", 0),
-                        **entity_data
-                    })
-                    
+                candidates_with_scores.append({
+                    "entity_name": entity_name,
+                    "adaptive_fastrp_similarity": adaptive_fastrp_similarity
+                })
             except Exception as e:
-                logger.debug(f"Error processing FastRP candidate {entity_name}: {e}")
-        
-        if not smart_candidates:
+                logger.debug(f"Error computing FastRP similarity for {entity_name}: {e}")
+
+        if not candidates_with_scores:
             logger.warning("No valid FastRP candidates found")
             return []
-        
-        # Sort by FastRP similarity and select top N
-        smart_candidates.sort(key=lambda x: x["adaptive_fastrp_similarity"], reverse=True)
-        top_smart_entities = smart_candidates[:query_param.top_fastrp_nodes]
 
-        logger.info(f"Adaptive FastRP selected top {len(top_smart_entities)} entities from {len(smart_candidates)} candidates")
+        # Sort by FastRP similarity and select top N entities
+        candidates_with_scores.sort(key=lambda x: x["adaptive_fastrp_similarity"], reverse=True)
+        top_candidates = candidates_with_scores[:query_param.top_fastrp_nodes]
+
+        # Batch fetch entity details for top candidates only
+        top_entity_names = [c["entity_name"] for c in top_candidates]
+        nodes_dict = await knowledge_graph_inst.get_nodes_batch(top_entity_names)
+
+        # Combine similarity scores with entity details
+        top_smart_entities = []
+        for candidate in top_candidates:
+            entity_name = candidate["entity_name"]
+            entity_data = nodes_dict.get(entity_name)
+            if entity_data:
+                top_smart_entities.append({
+                    "entity_name": entity_name,
+                    "adaptive_fastrp_similarity": candidate["adaptive_fastrp_similarity"],
+                    "discovery_method": "fastrp_analysis",
+                    "rank": entity_data.get("degree", 0),
+                    **entity_data
+                })
+
+        logger.info(f"Adaptive FastRP selected top {len(top_smart_entities)} entities from {len(candidates_with_scores)} candidates")
         logger.info(f"Adaptive FastRP analysis completed: avg similarity: {sum(e['adaptive_fastrp_similarity'] for e in top_smart_entities) / len(top_smart_entities) if top_smart_entities else 0:.4f}")
 
         return top_smart_entities
@@ -3095,28 +3144,49 @@ def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[
 
 
 async def _find_relations_for_entities(
-    entities: list[dict], 
-    relationships_vdb: BaseVectorStorage
+    entities: list[dict],
+    relationships_vdb: BaseVectorStorage,
+    max_concurrent: int = 10
 ) -> list[dict]:
-    """Find relations connecting given entities."""
+    """Find relations connecting given entities with parallel queries."""
     if not entities:
         return []
-    
+
     try:
         entity_names = [e.get("entity_name", "") for e in entities]
+        entity_names_set = set(entity_names)  # Convert to set for faster lookups
+
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def query_entity_relations(entity_name: str) -> list[dict]:
+            """Query relations for a single entity with semaphore control."""
+            async with semaphore:
+                try:
+                    relation_results = await relationships_vdb.query(entity_name, top_k=10)
+                    return relation_results
+                except Exception as e:
+                    logger.debug(f"Error finding relations for {entity_name}: {e}")
+                    return []
+
+        # Parallel query all entity relations
+        tasks = [query_entity_relations(entity_name) for entity_name in entity_names]
+        all_relation_results = await asyncio.gather(*tasks)
+
+        # Process results and deduplicate
+        seen_relations = set()
         relations = []
-        
-        for entity_name in entity_names:
-            try:
-                # Search for relations involving this entity
-                relation_results = await relationships_vdb.query(entity_name, top_k=10)
-                
-                for relation_data in relation_results:
-                    src_id = relation_data.get("src_id", "")
-                    tgt_id = relation_data.get("tgt_id", "")
-                    
-                    # Keep relations that connect our entities
-                    if (src_id in entity_names and tgt_id in entity_names):
+
+        for relation_results in all_relation_results:
+            for relation_data in relation_results:
+                src_id = relation_data.get("src_id", "")
+                tgt_id = relation_data.get("tgt_id", "")
+
+                # Keep relations that connect our entities
+                if src_id in entity_names_set and tgt_id in entity_names_set:
+                    relation_key = f"{src_id}|{tgt_id}"
+
+                    if relation_key not in seen_relations:
                         relation_info = {
                             "src_id": src_id,
                             "tgt_id": tgt_id,
@@ -3126,20 +3196,12 @@ async def _find_relations_for_entities(
                             "rank": relation_data.get("rank", 0),
                             **relation_data
                         }
-                        
-                        # Avoid duplicates
-                        if not any(
-                            r["src_id"] == src_id and r["tgt_id"] == tgt_id 
-                            for r in relations
-                        ):
-                            relations.append(relation_info)
-                            
-            except Exception as e:
-                logger.debug(f"Error finding relations for {entity_name}: {e}")
-        
+                        relations.append(relation_info)
+                        seen_relations.add(relation_key)
+
         logger.debug(f"Found {len(relations)} relations for {len(entity_names)} entities")
         return relations
-        
+
     except Exception as e:
         logger.error(f"Error finding relations for entities: {e}")
         return []
@@ -4151,6 +4213,12 @@ async def _build_query_context(
     text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
 
     result = f"""
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
+
+```json
+{text_units_str}
+```
+
 Knowledge Graph Data (Entity):
 
 ```json
@@ -4161,12 +4229,6 @@ Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
-```
-
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-{text_units_str}
 ```
 
 """
@@ -4623,6 +4685,12 @@ Document Chunks (Each entry has a reference_id refer to the `Reference Document 
 
             # Calculate base context tokens (entities + relations + template)
             kg_context_template = """
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
+
+```json
+[]
+```
+
 Knowledge Graph Data (Entity):
 
 ```json
@@ -4633,12 +4701,6 @@ Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
-```
-
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-[]
 ```
 
 """
@@ -4828,6 +4890,12 @@ Document Chunks (Each entry has a reference_id refer to the `Reference Document 
             relations_str = '\n'.join([json.dumps(r, ensure_ascii=False) for r in relations_for_token_calc])
 
             kg_context_template = """
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
+
+```json
+[]
+```
+
 Knowledge Graph Data (Entity):
 
 ```json
@@ -4838,12 +4906,6 @@ Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
-```
-
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-[]
 ```
 
 """
@@ -5052,6 +5114,12 @@ Document Chunks (Each entry has a reference_id refer to the `Reference Document 
         text_units_str = '\n'.join([json.dumps(c, ensure_ascii=False) for c in chunks_for_llm])
 
         result = f"""
+Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
+
+```json
+{text_units_str}
+```
+
 Knowledge Graph Data (Entity):
 
 ```json
@@ -5062,12 +5130,6 @@ Knowledge Graph Data (Relationship):
 
 ```json
 {relations_str}
-```
-
-Document Chunks (Each entry has a reference_id refer to the `Reference Document List`):
-
-```json
-{text_units_str}
 ```
 
 """.format(
