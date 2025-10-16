@@ -3504,13 +3504,15 @@ class LightRAG:
         
         # Step 5: LLM decision making for candidate pairs
         print(f"Starting LLM evaluation of candidate pairs...")
+        print(f"Note: Agentic merging processes pairs sequentially due to state dependencies")
+        print(f"      LLM calls within merge operations (summarization) use llm_model_max_async={self.llm_model_max_async}")
         merged_pairs = 0
         llm_evaluated_pairs = 0
         cached_merges = 0
         cached_skips = 0
         skipped_already_merged = 0  # Track entities that were already merged
         active_entities = set(range(len(entities)))  # Track which entities are still active
-        
+
         for i, j, similarity in candidate_pairs:
             # Skip if either entity has already been merged
             if i not in active_entities or j not in active_entities:
@@ -3796,17 +3798,34 @@ class LightRAG:
                 }
 
             logger.info(f"Processing {len(file_text_pairs)} documents for entity type augmentation")
-            
-            # Step 3: Process files with LLM to suggest new entity types
+
+            # Step 3: Process files with LLM to suggest new entity types (with parallel processing)
             all_new_entity_types = []
-            processed_count = 0
-            
-            for file_name, text_content in file_text_pairs:
-                logger.info(f"Processing file: {file_name}")
-                new_entity_types = await self._process_file_with_llm(text_content, current_entity_types)
+
+            # Use llm_model_max_async for concurrency control
+            max_async = self.llm_model_max_async
+            semaphore = asyncio.Semaphore(max_async)
+            logger.info(f"Processing files in parallel with max_async={max_async}")
+
+            async def process_file_with_limit(file_name: str, text_content: str):
+                async with semaphore:
+                    logger.info(f"Processing file: {file_name}")
+                    return await self._process_file_with_llm(text_content, current_entity_types)
+
+            # Create tasks for all files
+            tasks = [
+                process_file_with_limit(file_name, text_content)
+                for file_name, text_content in file_text_pairs
+            ]
+
+            # Execute in parallel with progress tracking
+            results = await asyncio.gather(*tasks)
+
+            # Collect all results
+            for new_entity_types in results:
                 all_new_entity_types.extend(new_entity_types)
-                processed_count += 1
-                logger.info(f"Processed {processed_count}/{len(file_text_pairs)} files")
+
+            logger.info(f"Processed {len(file_text_pairs)}/{len(file_text_pairs)} files")
             
             # Step 4: Combine and refine entity types
             combined_entity_types = current_entity_types + all_new_entity_types

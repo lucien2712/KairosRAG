@@ -39,11 +39,13 @@ class NodeEmbeddingEnhancer:
         self.fastrp_embeddings: Optional[Dict[str, np.ndarray]] = None
         self.pagerank_scores: Optional[Dict[str, float]] = None
         self.graph: Optional[nx.Graph] = None
-        
+        self._relations_cache: Optional[List[Dict]] = None  # Cache for all relations
+
         # File paths for persistence
         self.graph_path = os.path.join(working_dir, "node_embedding_graph.pkl")
         self.fastrp_path = os.path.join(working_dir, "fastrp_embeddings.pkl")
         self.pagerank_path = os.path.join(working_dir, "pagerank_scores.json")
+        self.relations_cache_path = os.path.join(working_dir, "relations_cache.pkl")
         
         # Try to load existing data
         self._load_persisted_data()
@@ -218,6 +220,31 @@ class NodeEmbeddingEnhancer:
             num_nodes = len(self.graph.nodes())
             return {node: 1.0/num_nodes for node in self.graph.nodes()}
             
+    async def get_all_relations_cached(self, knowledge_graph_inst) -> List[Dict]:
+        """Get all relations with caching to avoid repeated full-graph queries."""
+        if self._relations_cache is None:
+            logger.debug("Relations cache miss, fetching from knowledge graph")
+            self._relations_cache = await knowledge_graph_inst.get_all_relationships()
+            # Optionally persist to disk
+            try:
+                os.makedirs(self.working_dir, exist_ok=True)
+                with open(self.relations_cache_path, 'wb') as f:
+                    pickle.dump(self._relations_cache, f)
+                logger.debug(f"Saved {len(self._relations_cache)} relations to cache")
+            except Exception as e:
+                logger.debug(f"Failed to save relations cache: {e}")
+        return self._relations_cache
+
+    def invalidate_relations_cache(self):
+        """Invalidate relations cache (call when graph structure changes)."""
+        self._relations_cache = None
+        if os.path.exists(self.relations_cache_path):
+            try:
+                os.remove(self.relations_cache_path)
+                logger.debug("Relations cache invalidated")
+            except Exception as e:
+                logger.debug(f"Failed to remove relations cache file: {e}")
+
     def compute_personalized_pagerank(
         self,
         seed_entities: List[str],
@@ -391,25 +418,32 @@ class NodeEmbeddingEnhancer:
                 with open(self.graph_path, 'rb') as f:
                     self.graph = pickle.load(f)
                 logger.info(f"Loaded graph with {len(self.graph.nodes())} nodes from {self.graph_path}")
-            
+
             # Load FastRP embeddings
             if os.path.exists(self.fastrp_path):
                 with open(self.fastrp_path, 'rb') as f:
                     self.fastrp_embeddings = pickle.load(f)
                 logger.info(f"Loaded FastRP embeddings for {len(self.fastrp_embeddings)} entities")
-            
+
             # Load PageRank scores
             if os.path.exists(self.pagerank_path):
                 with open(self.pagerank_path, 'r') as f:
                     self.pagerank_scores = json.load(f)
                 logger.info(f"Loaded PageRank scores for {len(self.pagerank_scores)} entities")
-                
+
+            # Load Relations cache
+            if os.path.exists(self.relations_cache_path):
+                with open(self.relations_cache_path, 'rb') as f:
+                    self._relations_cache = pickle.load(f)
+                logger.info(f"Loaded relations cache with {len(self._relations_cache)} relations")
+
         except Exception as e:
             logger.warning(f"Could not load persisted node embedding data: {e}")
             # Reset to empty state
             self.graph = None
             self.fastrp_embeddings = None
             self.pagerank_scores = None
+            self._relations_cache = None
 
     def _compute_query_aware_weights(
         self,

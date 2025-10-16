@@ -3046,8 +3046,8 @@ async def _independent_ppr_analysis(
                         hl_query_embedding = await embedding_func.func([hl_keywords])
                         hl_query_vec = np.array(hl_query_embedding[0])
 
-                        # Get all relations from knowledge graph
-                        all_relations = await knowledge_graph_inst.get_all_relationships()
+                        # Get all relations from knowledge graph (with caching)
+                        all_relations = await node_embedding.get_all_relations_cached(knowledge_graph_inst)
 
                         # Prepare relation strings for batch embedding
                         rel_strs = []
@@ -3235,9 +3235,14 @@ def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[
 async def _find_relations_for_entities(
     entities: list[dict],
     relationships_vdb: BaseVectorStorage,
-    max_concurrent: int = 10
+    max_concurrent: int = 30
 ) -> list[dict]:
-    """Find relations connecting given entities with parallel queries."""
+    """Find relations connecting given entities with parallel queries.
+
+    Note: This uses vector database queries (not embedding API calls),
+    so we can safely use higher concurrency without hitting API rate limits.
+    Default: 30 (suitable for most VDB backends)
+    """
     if not entities:
         return []
 
@@ -4594,44 +4599,76 @@ async def _build_query_context(
         # Limit each entity/relation to related_chunk_number chunks (using vector similarity if available)
         related_chunk_number = global_config.get("related_chunk_number", 5)
 
-        # Helper function to select top N chunks by similarity
+        # Optimization: Pre-compute query embedding once and reuse
+        chunks_vdb = global_config.get("chunks_vdb")
+        query_vec_cache = None
+        chunk_vectors_cache = {}  # Cache for chunk vectors
+
+        if chunks_vdb and chunks_vdb.embedding_func:
+            try:
+                query_embedding = await chunks_vdb.embedding_func.func([query])
+                if query_embedding:
+                    query_vec_cache = query_embedding[0]
+                    logger.debug("Pre-computed query embedding for chunk similarity ranking")
+            except Exception as e:
+                logger.debug(f"Failed to pre-compute query embedding: {e}")
+
+        # Helper function to select top N chunks by similarity (optimized with cached query embedding)
         async def select_top_chunks_by_similarity(chunk_ids: list[str], query: str, limit: int) -> list[str]:
-            """Select top N chunks by vector similarity to query."""
+            """Select top N chunks by vector similarity to query (using cached query embedding)."""
             if len(chunk_ids) <= limit:
                 return chunk_ids
 
-            # Try to use vector similarity if available
-            chunks_vdb = global_config.get("chunks_vdb")
-            if chunks_vdb and chunks_vdb.embedding_func:
+            # Use cached query vector if available
+            if query_vec_cache is not None and chunks_vdb:
                 try:
-                    # Get query embedding
-                    query_embedding = await chunks_vdb.embedding_func.func([query])
-                    if query_embedding:
-                        query_vec = query_embedding[0]
+                    # Batch get chunk vectors (optimization!)
+                    chunk_ids_to_fetch = [cid for cid in chunk_ids if cid not in chunk_vectors_cache]
 
-                        # Get chunk vectors and calculate similarities
-                        chunk_similarities = []
-                        for chunk_id in chunk_ids:
-                            chunk_vec = await chunks_vdb.get_vector(chunk_id)
-                            if chunk_vec:
-                                from .utils import cosine_similarity
-                                similarity = cosine_similarity(query_vec, chunk_vec)
-                                chunk_similarities.append((chunk_id, similarity))
+                    if chunk_ids_to_fetch:
+                        try:
+                            # Try batch retrieval first
+                            vectors_dict = await chunks_vdb.get_vectors_by_ids(chunk_ids_to_fetch)
+                            chunk_vectors_cache.update(vectors_dict)
+                        except Exception as e:
+                            logger.debug(f"Batch vector retrieval not supported: {e}, falling back to individual queries")
+                            # Fallback: individual queries
+                            for chunk_id in chunk_ids_to_fetch:
+                                try:
+                                    chunk_vec = await chunks_vdb.get_vector(chunk_id)
+                                    if chunk_vec:
+                                        chunk_vectors_cache[chunk_id] = chunk_vec
+                                except Exception:
+                                    pass
 
-                        # Sort by similarity and take top N
-                        if chunk_similarities:
-                            chunk_similarities.sort(key=lambda x: x[1], reverse=True)
-                            return [chunk_id for chunk_id, _ in chunk_similarities[:limit]]
+                    # Calculate similarities using cached vectors
+                    chunk_similarities = []
+                    for chunk_id in chunk_ids:
+                        chunk_vec = chunk_vectors_cache.get(chunk_id)
+                        if chunk_vec:
+                            from .utils import cosine_similarity
+                            similarity = cosine_similarity(query_vec_cache, chunk_vec)
+                            chunk_similarities.append((chunk_id, similarity))
+
+                    # Sort by similarity and take top N
+                    if chunk_similarities:
+                        chunk_similarities.sort(key=lambda x: x[1], reverse=True)
+                        return [chunk_id for chunk_id, _ in chunk_similarities[:limit]]
                 except Exception as e:
                     logger.debug(f"Failed to use vector similarity for chunk selection: {e}")
 
-            # Fallback: just take first N chunks
+            # Fallback: just take first N chunks (maintains original behavior)
             return chunk_ids[:limit]
 
         # Use lists instead of sets to preserve occurrence information
         # Each chunk_id may appear multiple times (from different entities/relations)
         # This is important for accurate occurrence counting in unified processing
-        filtered_entity_chunks = []
+
+        # Optimization: Collect all chunk_ids first, then batch retrieve
+        entity_chunk_mapping = []  # [(chunk_id, source_type)]
+        relation_chunk_mapping = []
+
+        # Phase 1: Collect all chunk_ids from entities
         for entity in entities_context:
             source_id = entity.get("source_id", "")
             if source_id:
@@ -4642,19 +4679,11 @@ async def _build_query_context(
                 else:
                     limited_chunk_ids = [source_id]
 
-                # Retrieve chunks for this entity (allow duplicates across entities)
+                # Store mapping for later retrieval
                 for chunk_id in limited_chunk_ids:
-                    chunk_data = await text_chunks_db.get_by_id(chunk_id)
-                    if chunk_data:
-                        filtered_entity_chunks.append({
-                            "content": chunk_data["content"],
-                            "file_path": chunk_data.get("file_path", "unknown_source"),
-                            "timestamp": chunk_data.get("timestamp", ""),
-                            "chunk_id": chunk_id,
-                            "source": "entity"
-                        })
+                    entity_chunk_mapping.append((chunk_id, "entity"))
 
-        filtered_relation_chunks = []
+        # Phase 2: Collect all chunk_ids from relations
         for relation in relations_context:
             source_id = relation.get("source_id", "")
             if source_id:
@@ -4665,17 +4694,55 @@ async def _build_query_context(
                 else:
                     limited_chunk_ids = [source_id]
 
-                # Retrieve chunks for this relation (allow duplicates across relations)
+                # Store mapping for later retrieval
                 for chunk_id in limited_chunk_ids:
+                    relation_chunk_mapping.append((chunk_id, "relation"))
+
+        # Phase 3: Batch retrieve all chunks (major optimization!)
+        all_chunk_ids = [chunk_id for chunk_id, _ in entity_chunk_mapping] + [chunk_id for chunk_id, _ in relation_chunk_mapping]
+        unique_chunk_ids = list(set(all_chunk_ids))
+
+        logger.debug(f"Batch retrieving {len(unique_chunk_ids)} unique chunks from {len(all_chunk_ids)} total references")
+
+        # Use get_by_ids() for batch retrieval
+        chunk_data_dict = {}
+        if unique_chunk_ids:
+            try:
+                # Try batch retrieval first
+                chunk_data_list = await text_chunks_db.get_by_ids(unique_chunk_ids)
+                chunk_data_dict = {chunk["id"]: chunk for chunk in chunk_data_list if chunk and "id" in chunk}
+            except Exception as e:
+                logger.debug(f"Batch retrieval not supported or failed: {e}, falling back to individual queries")
+                # Fallback: individual queries
+                for chunk_id in unique_chunk_ids:
                     chunk_data = await text_chunks_db.get_by_id(chunk_id)
                     if chunk_data:
-                        filtered_relation_chunks.append({
-                            "content": chunk_data["content"],
-                            "file_path": chunk_data.get("file_path", "unknown_source"),
-                            "timestamp": chunk_data.get("timestamp", ""),
-                            "chunk_id": chunk_id,
-                            "source": "relation"
-                        })
+                        chunk_data_dict[chunk_id] = chunk_data
+
+        # Phase 4: Build chunk lists from cached data
+        filtered_entity_chunks = []
+        for chunk_id, source_type in entity_chunk_mapping:
+            chunk_data = chunk_data_dict.get(chunk_id)
+            if chunk_data:
+                filtered_entity_chunks.append({
+                    "content": chunk_data["content"],
+                    "file_path": chunk_data.get("file_path", "unknown_source"),
+                    "timestamp": chunk_data.get("timestamp", ""),
+                    "chunk_id": chunk_id,
+                    "source": source_type
+                })
+
+        filtered_relation_chunks = []
+        for chunk_id, source_type in relation_chunk_mapping:
+            chunk_data = chunk_data_dict.get(chunk_id)
+            if chunk_data:
+                filtered_relation_chunks.append({
+                    "content": chunk_data["content"],
+                    "file_path": chunk_data.get("file_path", "unknown_source"),
+                    "timestamp": chunk_data.get("timestamp", ""),
+                    "chunk_id": chunk_id,
+                    "source": source_type
+                })
 
         # Use unified chunk processing on filtered chunks
         logger.debug(f"Starting unified chunk processing: {len(filtered_entity_chunks)} entity + {len(filtered_relation_chunks)} relation chunks")
