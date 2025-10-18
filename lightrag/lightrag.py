@@ -4160,6 +4160,27 @@ class LightRAG:
                     continue
 
             except Exception as e:
+                error_msg = str(e).lower()
+
+                # Check if error is due to token/context limit exceeded
+                # Support multiple LLM providers' error message formats:
+                # - Mistral: "too large for model"
+                # - OpenAI: "context_length_exceeded" or "maximum context length"
+                # - General: "400" error code
+                is_token_limit_error = (
+                    ("400" in error_msg and "too large" in error_msg) or
+                    "context_length_exceeded" in error_msg or
+                    ("maximum context length" in error_msg and "tokens" in error_msg)
+                )
+
+                if is_token_limit_error:
+                    logger.warning(f"Document exceeds token limit, splitting into chunks for processing...")
+                    # Use chunking fallback for large documents
+                    return await self._process_large_file_with_chunking(
+                        file_content, current_entity_types
+                    )
+
+                # For other errors, retry as before
                 logger.warning(f"Attempt {attempt + 1}/{max_retries}: Error processing file with LLM: {e}")
                 if attempt < max_retries - 1:
                     continue
@@ -4170,6 +4191,90 @@ class LightRAG:
         # If all retries failed
         logger.error(f"Failed to extract entity types after {max_retries} attempts, returning empty list")
         return []
+
+    async def _process_large_file_with_chunking(self, file_content: str, current_entity_types: list) -> list:
+        """Process a large file by splitting into chunks when token limit is exceeded.
+
+        This function is called as a fallback when _process_file_with_llm encounters
+        a 400 error due to token limit. It splits the file into manageable chunks,
+        processes each chunk separately, and aggregates the results.
+
+        Args:
+            file_content: The full text content that exceeded token limit
+            current_entity_types: List of existing entity types
+
+        Returns:
+            List of suggested entity types aggregated from all chunks
+        """
+        from .operate import chunking_by_token_size
+        from .prompt import PROMPTS
+
+        logger.info(f"Splitting large document into chunks for entity type extraction...")
+
+        # Split document into chunks (6000 tokens per chunk, 200 token overlap)
+        chunks = chunking_by_token_size(
+            tokenizer=self.tokenizer,
+            content=file_content,
+            max_token_size=6000,
+            overlap_token_size=200
+        )
+
+        logger.info(f"Split document into {len(chunks)} chunks")
+
+        # Process each chunk with LLM
+        all_suggested_types = []
+        client = self._create_openai_client()
+        current_entity_types_json = json.dumps(
+            [et["entity_type"] for et in current_entity_types]
+        )
+
+        for chunk_idx, chunk_data in enumerate(chunks, 1):
+            chunk_content = chunk_data["content"]
+            logger.info(f"Processing chunk {chunk_idx}/{len(chunks)}")
+
+            try:
+                response = client.chat.completions.create(
+                    model=self.tool_llm_model_name,
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": PROMPTS["entity_type_suggestion_system"],
+                        },
+                        {
+                            "role": "user",
+                            "content": PROMPTS["entity_type_suggestion_user"].format(
+                                current_entity_types=current_entity_types_json,
+                                file_content=chunk_content
+                            ),
+                        },
+                    ],
+                )
+
+                llm_response = response.choices[0].message.content
+                suggested_types = self._extract_json_from_response(llm_response)
+
+                if suggested_types and isinstance(suggested_types, list):
+                    all_suggested_types.extend(suggested_types)
+                    logger.info(f"Chunk {chunk_idx}: Extracted {len(suggested_types)} entity types")
+                else:
+                    logger.warning(f"Chunk {chunk_idx}: No valid entity types extracted")
+
+            except Exception as e:
+                logger.warning(f"Chunk {chunk_idx}: Error processing chunk: {e}")
+                continue
+
+        # Deduplicate entity types by entity_type field
+        seen_types = set()
+        deduplicated_types = []
+
+        for entity_type_obj in all_suggested_types:
+            entity_type_name = entity_type_obj.get("entity_type", "")
+            if entity_type_name and entity_type_name not in seen_types:
+                seen_types.add(entity_type_name)
+                deduplicated_types.append(entity_type_obj)
+
+        logger.info(f"Chunk processing complete: {len(all_suggested_types)} total types -> {len(deduplicated_types)} after deduplication")
+        return deduplicated_types
 
     async def _refine_entity_types(self, entity_types: list) -> list:
         """Use LLM to remove duplicates and refine entity types with retry mechanism."""
