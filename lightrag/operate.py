@@ -2871,22 +2871,32 @@ async def _multi_hop_expand(
     relationships_vdb: BaseVectorStorage,
     global_config: dict[str, str] = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Multi-hop expansion using a three-way parallel approach 
+    """Multi-hop expansion using a three-way parallel approach
     (Multi-hop + PPR + FastRP).
-    
-    The activation of each method is controlled by its respective parameters 
-    (e.g., top_ppr_nodes).
+
+    Each method is independently controlled by its respective parameters:
+    - Multi-hop: max_hop > 0
+    - PPR: top_ppr_nodes > 0
+    - FastRP: top_fastrp_nodes > 0
+
+    At least one method must be enabled for this function to return results.
     """
-    
-    if query_param.max_hop <= 0:
+
+    # Check if any expansion method is enabled
+    has_any_method = (
+        query_param.max_hop > 0 or
+        query_param.top_ppr_nodes > 0 or
+        query_param.top_fastrp_nodes > 0
+    )
+
+    if not has_any_method:
         return [], []
-        
+
     # The 3-perspective expansion is the only expansion strategy.
-    # The individual methods (PPR, FastRP) will gracefully deactivate 
+    # The individual methods (PPR, FastRP, Multi-hop) will gracefully deactivate
     # if their parameters are 0 or if the node_embedding engine is not configured.
-    # The semantic multi-hop (_original_multi_hop_expand) will always run as part of this.
     return await _semantic_expansion_plus_structural_analysis(
-        seed_nodes, ll_keywords, hl_keywords, query_param, 
+        seed_nodes, ll_keywords, hl_keywords, query_param,
         knowledge_graph_inst, entities_vdb, relationships_vdb, global_config
     )
 
@@ -2901,37 +2911,74 @@ async def _semantic_expansion_plus_structural_analysis(
     relationships_vdb: BaseVectorStorage,
     global_config: dict[str, str],
 ) -> tuple[list[dict], list[dict]]:
-    """Three-way parallel expansion: Multi-hop + PPR + Adaptive FastRP with independent pools."""
+    """Three-way parallel expansion: Multi-hop + PPR + Adaptive FastRP with independent pools.
 
-    logger.info(f"Three-way parallel expansion: multi_hop + ppr({query_param.top_ppr_nodes}) + adaptive_fastrp({query_param.top_fastrp_nodes})")
+    Each method is independently controlled and will only execute if its parameter is > 0.
+    """
 
+    # Build list of active methods for logging
+    active_methods = []
+    if query_param.max_hop > 0:
+        active_methods.append(f"multi_hop({query_param.max_hop})")
+    if query_param.top_ppr_nodes > 0:
+        active_methods.append(f"ppr({query_param.top_ppr_nodes})")
+    if query_param.top_fastrp_nodes > 0:
+        active_methods.append(f"fastrp({query_param.top_fastrp_nodes})")
 
-    # Create params for multi-hop expansion (keeps original top_neighbors)
-    multihop_param = QueryParam(
-        max_hop=query_param.max_hop,
-        top_neighbors=query_param.top_neighbors,
-        multi_hop_relevance_threshold=query_param.multi_hop_relevance_threshold,
-        top_fastrp_nodes=0,  # Multi-hop only, no structural analysis
-    )
-    
-    # Execute three approaches in parallel
-    multihop_task = _original_multi_hop_expand(
-        seed_nodes, ll_keywords, hl_keywords, multihop_param,
-        knowledge_graph_inst, entities_vdb, relationships_vdb
-    )
-    
-    ppr_task = _independent_ppr_analysis(
-        seed_nodes, query_param, knowledge_graph_inst, global_config, ll_keywords, hl_keywords
-    )
-    
-    fastrp_task = _independent_fastrp_analysis(
-        seed_nodes, query_param, knowledge_graph_inst, global_config
-    )
-    
-    # Wait for all three approaches to complete
-    (multihop_entities, multihop_relations), ppr_entities, fastrp_entities = await asyncio.gather(
-        multihop_task, ppr_task, fastrp_task
-    )
+    logger.info(f"Three-way parallel expansion with active methods: {', '.join(active_methods)}")
+
+    # Prepare tasks for parallel execution
+    tasks = []
+    task_types = []
+
+    # Add multi-hop task if enabled
+    if query_param.max_hop > 0:
+        multihop_param = QueryParam(
+            max_hop=query_param.max_hop,
+            top_neighbors=query_param.top_neighbors,
+            multi_hop_relevance_threshold=query_param.multi_hop_relevance_threshold,
+            top_fastrp_nodes=0,  # Multi-hop only, no structural analysis
+        )
+        tasks.append(_original_multi_hop_expand(
+            seed_nodes, ll_keywords, hl_keywords, multihop_param,
+            knowledge_graph_inst, entities_vdb, relationships_vdb
+        ))
+        task_types.append("multihop")
+
+    # Add PPR task if enabled
+    if query_param.top_ppr_nodes > 0:
+        tasks.append(_independent_ppr_analysis(
+            seed_nodes, query_param, knowledge_graph_inst, global_config, ll_keywords, hl_keywords
+        ))
+        task_types.append("ppr")
+
+    # Add FastRP task if enabled
+    if query_param.top_fastrp_nodes > 0:
+        tasks.append(_independent_fastrp_analysis(
+            seed_nodes, query_param, knowledge_graph_inst, global_config
+        ))
+        task_types.append("fastrp")
+
+    # Execute all enabled approaches in parallel
+    if not tasks:
+        return [], []
+
+    results = await asyncio.gather(*tasks)
+
+    # Unpack results based on which tasks were executed
+    multihop_entities, multihop_relations = [], []
+    ppr_entities = []
+    fastrp_entities = []
+
+    result_idx = 0
+    for task_type in task_types:
+        if task_type == "multihop":
+            multihop_entities, multihop_relations = results[result_idx]
+        elif task_type == "ppr":
+            ppr_entities = results[result_idx]
+        elif task_type == "fastrp":
+            fastrp_entities = results[result_idx]
+        result_idx += 1
     
     logger.info(f"Multi-hop found: {len(multihop_entities)} entities, {len(multihop_relations)} relations")
     logger.info(f"PPR found: {len(ppr_entities)} entities")
@@ -4313,9 +4360,23 @@ async def _build_query_context(
         relations_section = format_relations_json(relations_for_llm)
         result = f"{chunks_section}\n{entities_section}\n{relations_section}"
     
-    # Multi-hop expansion if enabled
-    if query_param.max_hop > 0 and (entities_context or relations_context):
-        logger.info(f"Performing multi-hop expansion with max_hop={query_param.max_hop}")
+    # Multi-hop expansion if any expansion method is enabled
+    should_expand = (
+        query_param.max_hop > 0 or
+        query_param.top_ppr_nodes > 0 or
+        query_param.top_fastrp_nodes > 0
+    )
+
+    if should_expand and (entities_context or relations_context):
+        expansion_methods = []
+        if query_param.max_hop > 0:
+            expansion_methods.append(f"multi_hop({query_param.max_hop})")
+        if query_param.top_ppr_nodes > 0:
+            expansion_methods.append(f"ppr({query_param.top_ppr_nodes})")
+        if query_param.top_fastrp_nodes > 0:
+            expansion_methods.append(f"fastrp({query_param.top_fastrp_nodes})")
+
+        logger.info(f"Performing expansion with methods: {', '.join(expansion_methods)}")
         logger.info(f"Initial entities: {len(entities_context)}, relations: {len(relations_context)}")
         
         # Collect initial chunks for expansion processing with source labels
