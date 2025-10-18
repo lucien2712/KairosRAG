@@ -3504,8 +3504,6 @@ class LightRAG:
         
         # Step 5: LLM decision making for candidate pairs
         print(f"Starting LLM evaluation of candidate pairs...")
-        print(f"Note: Agentic merging processes pairs sequentially due to state dependencies")
-        print(f"      LLM calls within merge operations (summarization) use llm_model_max_async={self.llm_model_max_async}")
         merged_pairs = 0
         llm_evaluated_pairs = 0
         cached_merges = 0
