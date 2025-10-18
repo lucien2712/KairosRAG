@@ -134,14 +134,18 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
     """
     for attempt in range(max_retries + 1):
         try:
-            response = await asyncio.to_thread(
-                lambda: client.chat.completions.create(
-                    model=tool_llm_model_name,
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.0,
-                )
+            # Add timeout protection to prevent indefinite waiting
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: client.chat.completions.create(
+                        model=tool_llm_model_name,
+                        messages=[
+                            {"role": "user", "content": prompt}
+                        ],
+                        temperature=0.0,
+                    )
+                ),
+                timeout=180.0  # 3 minutes timeout
             )
             response_text = response.choices[0].message.content
 
@@ -158,6 +162,11 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
                     logger.warning(f"Failed to extract JSON after {max_retries + 1} attempts")
                     logger.warning(f"Final response was: {response_text[:300]}")
 
+        except asyncio.TimeoutError:
+            if attempt < max_retries:
+                logger.warning(f"LLM call timeout (180s), retrying ({attempt + 1}/{max_retries})...")
+            else:
+                logger.error(f"LLM call timeout after {max_retries + 1} attempts")
         except Exception as e:
             if attempt < max_retries:
                 logger.warning(f"LLM call failed: {e}, retrying ({attempt + 1}/{max_retries})...")
