@@ -18,7 +18,7 @@ class NodeEmbeddingConfig:
     """Configuration for FastRP and Personalized PageRank."""
     
     # FastRP parameters
-    embedding_dimension: int = 128
+    embedding_dimension: int = 256
     normalization_strength: float = -0.1
     iteration_weights: List[float] = field(default_factory=lambda: [1.0, 1.0, 0.5, 0.25])
     random_seed: Optional[int] = 42
