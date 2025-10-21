@@ -793,135 +793,191 @@ PROMPTS["entity_type_refinement_user"] = """
 Please provide the refined list in strict JSON array format.
 """
 
-# Legacy single-filter prompts removed - now using recognition_filter
+
 PROMPTS["recognition_filter"] = """---Role---
-You are a conservative filter component in a comprehensive question-answering system. Your primary goal is to preserve information completeness while only removing clearly irrelevant items. The query may require supporting context, background information, and multi-hop reasoning chains.
+You are an intelligent filter in a question-answering system. Your task is to identify and remove irrelevant entities and relationships based on the question type and complexity.
 
 ---Task---
-Given a user query, a list of entities, and a list of relationships, identify which items to REMOVE. **Your filtering should be VERY conservative** - only remove items that are obviously unrelated to the query topic.
+1. **Analyze the question** to determine its type and requirements
+2. **Identify which entities and relationships to REMOVE** (not keep)
+3. **Adapt your filtering strategy** based on question characteristics
 
-**CRITICAL**: You MUST carefully analyze BOTH the names and descriptions:
-- **For Entities**: Consider both `entity_name` and `description` - the name provides the subject, the description provides detailed context.
-- **For Relationships**: Consider `src_id`, `tgt_id`, and `description` - the entity names show what's connected, the description explains how and why.
+---Question Type Guidelines---
 
----Inclusion/Exclusion Criteria---
-Use a **high bar for removal**. Only **REMOVE** an item if it meets ALL of these conditions:
-1. The item is completely unrelated to the query topic
-2. The item cannot provide any supporting context or background information
-3. The item is not part of any plausible reasoning chain
+**Type 1: Fact Retrieval** (Simple factual questions with direct answers)
+- Characteristics: Asks for specific facts like location, time, name, or definition
+- Question patterns: "Where is...", "When was...", "Who invented...", "What is the capital of..."
+- Filtering Strategy: STRICT - Only keep items directly involved in the answer
+- What to remove: Background information, related but indirect entities, historical context not directly answering the question
 
-**Guidelines for Removal (STRICT - all must apply):**
-- The item belongs to a completely different domain or topic
-- The item has absolutely no semantic connection to any term in the query
-- The item cannot help understand the answer even as background context
+**Type 2: Complex Reasoning** (Multi-hop questions requiring logical connections)
+- Characteristics: Requires connecting multiple pieces of information across different contexts
+- Question patterns: "How did X influence Y?", "What is the relationship between...", "Why did X lead to Y?"
+- Filtering Strategy: CONSERVATIVE - Preserve all potential reasoning paths and intermediate connections
+- What to remove: Only items from completely different domains with zero connection
 
-**Guidelines for Keeping (LIBERAL - any applies):**
-- The item is explicitly named in the query or directly answers it
-- The item provides supporting context, background information, or related concepts
-- The item could be part of a multi-hop reasoning chain (even indirectly)
-- The item provides historical, geographical, or conceptual context
-- The item is related to the same domain, time period, or topic area
+**Type 3: Contextual Summarize** (Synthesis of fragmented information into coherent understanding)
+- Characteristics: Asks for comprehensive description, role explanation, or overview
+- Question patterns: "Describe the role of...", "What were the main features of...", "Explain the significance of..."
+- Filtering Strategy: BALANCED - Keep descriptive context and relevant background while removing tangential information
+- What to remove: Entities from unrelated domains, overly specific details not contributing to the overall picture
 
-**Handling Uncertainty**: **Default to KEEPING items**. When in doubt about relevance, **ALWAYS KEEP IT**. It is better to preserve potentially useful information than to risk losing important context.
+**Type 4: Creative Generation** (Inference, imagination, or hypothetical scenarios)
+- Characteristics: Asks to create, imagine, rewrite, or generate content beyond factual retrieval
+- Question patterns: "Write a story about...", "Imagine if...", "Rewrite as...", "Create a dialogue between..."
+- Filtering Strategy: VERY CONSERVATIVE - Keep rich details, atmosphere, and contextual elements
+- What to remove: Only completely unrelated topics from different domains
 
 ---Examples---
 
-**Example 1 (Direct Query with Supporting Context)**
-
-Query: "Who directed the movie Inception?"
+### Example 1: Fact Retrieval ###
+Query: "What is the capital city of Australia?"
 
 Entities:
-[{{"entity_name": "Inception", "description": "A 2010 science fiction action film."}}, {{"entity_name": "Christopher Nolan", "description": "An English and American film director, producer, and screenwriter."}}, {{"entity_name": "Leonardo DiCaprio", "description": "An American actor and film producer."}}, {{"entity_name": "Hans Zimmer", "description": "A German film score composer and record producer."}}, {{"entity_name": "The Godfather", "description": "A 1972 American crime film directed by Francis Ford Coppola."}}]
+[
+  {{"entity_name": "Australia", "description": "A country in Oceania"}},
+  {{"entity_name": "Canberra", "description": "The capital city of Australia"}},
+  {{"entity_name": "Sydney", "description": "Largest city in Australia, major port"}},
+  {{"entity_name": "Kangaroo", "description": "Native Australian animal"}},
+  {{"entity_name": "Great Barrier Reef", "description": "Coral reef system off Australia's coast"}}
+]
 
-Relationships:
-[{{"id": "rel_0", "src_id": "Christopher Nolan", "tgt_id": "Inception", "description": "Christopher Nolan directed the movie Inception."}}, {{"id": "rel_1", "src_id": "Leonardo DiCaprio", "tgt_id": "Inception", "description": "Leonardo DiCaprio starred in the movie Inception."}}, {{"id": "rel_2", "src_id": "Hans Zimmer", "tgt_id": "Inception", "description": "Hans Zimmer composed the score for Inception."}}]
+Relations:
+[
+  {{"id": "rel_0", "src_id": "Canberra", "tgt_id": "Australia", "description": "capital of"}},
+  {{"id": "rel_1", "src_id": "Sydney", "tgt_id": "Australia", "description": "located in"}},
+  {{"id": "rel_2", "src_id": "Kangaroo", "tgt_id": "Australia", "description": "native to"}},
+  {{"id": "rel_3", "src_id": "Great Barrier Reef", "tgt_id": "Australia", "description": "located near"}}
+]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["The Godfather"],
-  "irrelevant_relation_ids": []
+  "irrelevant_entity_ids": ["Sydney", "Kangaroo", "Great Barrier Reef"],
+  "irrelevant_relation_ids": ["rel_1", "rel_2", "rel_3"]
 }}
 
-Reasoning: Keep Leonardo DiCaprio and Hans Zimmer as they provide valuable context about the movie. Only remove The Godfather as it's completely unrelated.
-
-**Example 2 (Multi-hop Query with Context)**
-
-Query: "What is the capital of the country where the Eiffel Tower is located?"
+### Example 2: Complex Reasoning ###
+Query: "How did the development of steam engines impact industrial textile production?"
 
 Entities:
-[{{"entity_name": "Eiffel Tower", "description": "A wrought-iron lattice tower on the Champ de Mars in Paris."}}, {{"entity_name": "Paris", "description": "The capital and most populous city of France."}}, {{"entity_name": "France", "description": "A country primarily located in Western Europe."}}, {{"entity_name": "Louvre Museum", "description": "The world's largest art museum and a historic monument in Paris."}}, {{"entity_name": "Mount Fuji", "description": "An active volcano and the highest mountain in Japan."}}]
+[
+  {{"entity_name": "Steam Engine", "description": "Machine that converts steam power to mechanical work"}},
+  {{"entity_name": "Industrial Revolution", "description": "Period of major industrialization in the 18th-19th centuries"}},
+  {{"entity_name": "Textile Mills", "description": "Factories for textile production"}},
+  {{"entity_name": "Cotton", "description": "Soft fiber used in textile manufacturing"}},
+  {{"entity_name": "James Watt", "description": "Scottish inventor who improved the steam engine"}},
+  {{"entity_name": "Electricity", "description": "Form of energy discovered later"}},
+  {{"entity_name": "Computer", "description": "Modern electronic device"}}
+]
 
-Relationships:
-[{{"id": "rel_0", "src_id": "Eiffel Tower", "tgt_id": "Paris", "description": "The Eiffel Tower is located in the city of Paris."}}, {{"id": "rel_1", "src_id": "Paris", "tgt_id": "France", "description": "Paris is the capital city of France."}}, {{"id": "rel_2", "src_id": "Louvre Museum", "tgt_id": "Paris", "description": "The Louvre Museum is located in Paris."}}]
+Relations:
+[
+  {{"id": "rel_0", "src_id": "Steam Engine", "tgt_id": "Industrial Revolution", "description": "enabled"}},
+  {{"id": "rel_1", "src_id": "Steam Engine", "tgt_id": "Textile Mills", "description": "powered"}},
+  {{"id": "rel_2", "src_id": "Textile Mills", "tgt_id": "Cotton", "description": "processed"}},
+  {{"id": "rel_3", "src_id": "James Watt", "tgt_id": "Steam Engine", "description": "improved"}},
+  {{"id": "rel_4", "src_id": "Electricity", "tgt_id": "Computer", "description": "powers"}}
+]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Mount Fuji"],
-  "irrelevant_relation_ids": []
+  "irrelevant_entity_ids": ["Computer"],
+  "irrelevant_relation_ids": ["rel_4"]
 }}
 
-Reasoning: Keep Louvre Museum as it provides geographical context about Paris. Only remove Mount Fuji as it's in a different country and completely unrelated.
-
-**Example 3 (General Knowledge Query)**
-
-Query: "What are the main components of Earth's atmosphere?"
+### Example 3: Contextual Summarize ###
+Query: "Describe the main characteristics of tropical rainforest ecosystems"
 
 Entities:
-[{{"entity_name": "Earth's Atmosphere", "description": "The layer of gases surrounding the planet Earth."}}, {{"entity_name": "Nitrogen", "description": "A chemical element which is the main constituent of Earth's atmosphere (78%)."}}, {{"entity_name": "Oxygen", "description": "A chemical element that makes up about 21% of the Earth's atmosphere."}}, {{"entity_name": "Argon", "description": "A chemical element, the third-most abundant gas in the Earth's atmosphere (0.9%)."}}, {{"entity_name": "Earth's Core", "description": "The very hot, very dense center of our planet."}}]
+[
+  {{"entity_name": "Tropical Rainforest", "description": "Dense forest in tropical regions with high rainfall"}},
+  {{"entity_name": "Biodiversity", "description": "Variety of plant and animal life"}},
+  {{"entity_name": "Canopy Layer", "description": "Upper layer of trees in rainforest"}},
+  {{"entity_name": "Amazon", "description": "Largest tropical rainforest"}},
+  {{"entity_name": "Precipitation", "description": "High annual rainfall in these regions"}},
+  {{"entity_name": "Arctic Tundra", "description": "Cold, treeless biome in polar regions"}},
+  {{"entity_name": "Desert Sand", "description": "Dry, sandy terrain"}}
+]
 
-Relationships:
-[{{"id": "rel_0", "src_id": "Earth's Atmosphere", "tgt_id": "Nitrogen", "description": "Nitrogen is the main component of the atmosphere."}}, {{"id": "rel_1", "src_id": "Earth's Atmosphere", "tgt_id": "Oxygen", "description": "Oxygen is the second major component of the atmosphere."}}, {{"id": "rel_2", "src_id": "Earth's Core", "tgt_id": "Iron", "description": "The Earth's core is primarily composed of Iron and Nickel."}}]
+Relations:
+[
+  {{"id": "rel_0", "src_id": "Tropical Rainforest", "tgt_id": "Biodiversity", "description": "supports high levels of"}},
+  {{"id": "rel_1", "src_id": "Canopy Layer", "tgt_id": "Tropical Rainforest", "description": "part of"}},
+  {{"id": "rel_2", "src_id": "Amazon", "tgt_id": "Tropical Rainforest", "description": "example of"}},
+  {{"id": "rel_3", "src_id": "Precipitation", "tgt_id": "Tropical Rainforest", "description": "characteristic of"}},
+  {{"id": "rel_4", "src_id": "Arctic Tundra", "tgt_id": "Desert Sand", "description": "unrelated to"}}
+]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Earth's Core"],
-  "irrelevant_relation_ids": ["rel_2"]
+  "irrelevant_entity_ids": ["Arctic Tundra", "Desert Sand"],
+  "irrelevant_relation_ids": ["rel_4"]
 }}
 
-**Example 4 (Completely Unrelated Items)**
-
-Query: "What is the habitat of the animal that preys on lemmings?"
+### Example 4: Creative Generation ###
+Query: "Write a poem about a lighthouse keeper watching a storm"
 
 Entities:
-[{{"entity_name": "Arctic Fox", "description": "A small fox native to the Arctic regions."}}, {{"entity_name": "Lemming", "description": "A small rodent, typically found in or near the Arctic."}}, {{"entity_name": "Tundra", "description": "A vast, flat, treeless Arctic region in which the subsoil is permanently frozen."}}, {{"entity_name": "Penguin", "description": "A species of aquatic flightless birds living almost exclusively in the Southern Hemisphere."}}, {{"entity_name": "Python Programming", "description": "A high-level programming language used for software development."}}, {{"entity_name": "Bitcoin", "description": "A decentralized digital currency system."}}]
+[
+  {{"entity_name": "Lighthouse", "description": "Tower with light to guide ships"}},
+  {{"entity_name": "Keeper", "description": "Person who maintains the lighthouse"}},
+  {{"entity_name": "Storm", "description": "Severe weather with wind and rain"}},
+  {{"entity_name": "Ocean", "description": "Large body of saltwater"}},
+  {{"entity_name": "Waves", "description": "Moving water surface"}},
+  {{"entity_name": "Solitude", "description": "State of being alone"}},
+  {{"entity_name": "Thunder", "description": "Sound from lightning"}},
+  {{"entity_name": "Spacecraft", "description": "Vehicle for space travel"}},
+  {{"entity_name": "Quantum Physics", "description": "Study of subatomic particles"}}
+]
 
-Relationships:
-[{{"id": "rel_0", "src_id": "Arctic Fox", "tgt_id": "Lemming", "description": "The Arctic Fox preys on lemmings."}}, {{"id": "rel_1", "src_id": "Arctic Fox", "tgt_id": "Tundra", "description": "The Arctic Fox lives in the Tundra habitat."}}, {{"id": "rel_2", "src_id": "Penguin", "tgt_id": "Antarctica", "description": "Penguins live in Antarctica."}}]
+Relations:
+[
+  {{"id": "rel_0", "src_id": "Keeper", "tgt_id": "Lighthouse", "description": "maintains"}},
+  {{"id": "rel_1", "src_id": "Storm", "tgt_id": "Ocean", "description": "occurs over"}},
+  {{"id": "rel_2", "src_id": "Waves", "tgt_id": "Storm", "description": "created by"}},
+  {{"id": "rel_3", "src_id": "Thunder", "tgt_id": "Storm", "description": "part of"}},
+  {{"id": "rel_4", "src_id": "Keeper", "tgt_id": "Solitude", "description": "experiences"}},
+  {{"id": "rel_5", "src_id": "Spacecraft", "tgt_id": "Quantum Physics", "description": "unrelated"}}
+]
 
 Output:
 {{
-  "irrelevant_entity_ids": ["Python Programming", "Bitcoin"],
-  "irrelevant_relation_ids": []
+  "irrelevant_entity_ids": ["Spacecraft", "Quantum Physics"],
+  "irrelevant_relation_ids": ["rel_5"]
 }}
 
-Reasoning: Keep Penguin as it's still a polar animal providing some context. Only remove Python Programming and Bitcoin as they belong to completely different domains (technology/finance vs biology).
+---Input---
+Query: {query}
 
----Output Format---
-You MUST respond with ONLY a valid JSON object. No markdown code blocks, no explanations, no additional text.
-
-Format:
-{{
-  "irrelevant_entity_ids": ["entity_name_1", "entity_name_2"],
-  "irrelevant_relation_ids": ["rel_id_1", "rel_id_2"]
-}}
-
-**CRITICAL**:
-- List ONLY items you want to REMOVE.
-- Use EXACT "entity_name" and "id" values from the input.
-- Weigh the trade-off between completeness and noise when uncertain.
-- Return empty arrays if all items should be kept.
-- Your response must start with {{ and end with }}
-
----Query---
-{query}
-
----Entities---
+Entities:
 {entities_json}
 
----Relationships---
+Relations:
 {relations_json}
 
----Your JSON Response---
-"""
+---Output Format---
+Analyze the question type and list items to remove in JSON format:
+
+{{
+  "irrelevant_entity_ids": ["entity1", "entity2", ...],
+  "irrelevant_relation_ids": ["rel_1", "rel_2", ...]
+}}
+
+---Critical Guidelines---
+1. **No fixed removal percentage** - Remove based solely on relevance, not quantity. If everything is relevant, return empty lists. If most items are irrelevant, remove most.
+
+2. **Question type determines strictness**:
+   - Fact Retrieval: Be strict, keep only direct answer components
+   - Complex Reasoning: Be conservative, preserve reasoning chains
+   - Contextual Summarize: Be balanced, keep descriptive context
+   - Creative Generation: Be very conservative, keep inspirational material
+
+3. **When in doubt, keep the item** - It's better to include a potentially useful item than to remove something that might be part of the answer path
+
+4. **Consider indirect connections** - For Complex Reasoning and Creative Generation, an entity may seem unrelated but could be a bridge between concepts
+
+5. **Examine both names and descriptions** - The entity name might seem irrelevant, but the description could reveal connections to the query
+
+Output your analysis:"""
 
 
