@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """Node embedding enhancer using FastRP and Personalized PageRank."""
 
 import numpy as np
@@ -10,7 +12,43 @@ import pickle
 import json
 from scipy import sparse
 
+from ..utils import cosine_similarity
+from .structural_similarity import compute_adaptive_fastrp_batch
+
 logger = logging.getLogger(__name__)
+
+
+def resolve_positive_int(value: int | str | None, default: int) -> int:
+    """Return a positive integer from value or fallback to default."""
+    try:
+        candidate = int(value)  # type: ignore[arg-type]
+        if candidate > 0:
+            return candidate
+    except (TypeError, ValueError):
+        pass
+    return default
+
+
+async def compute_embeddings_in_batches(
+    items: List[str],
+    embedding_func,
+    batch_size: int,
+) -> List:
+    """Compute embeddings for the given items in batches while preserving order."""
+    if batch_size <= 0:
+        batch_size = 1
+
+    embeddings: List = []
+    for start in range(0, len(items), batch_size):
+        batch = items[start:start + batch_size]
+        if not batch:
+            continue
+        batch_embeddings = await embedding_func.func(batch)
+        if isinstance(batch_embeddings, list):
+            embeddings.extend(batch_embeddings)
+        else:
+            embeddings.append(batch_embeddings)
+    return embeddings
 
 
 @dataclass
@@ -382,6 +420,235 @@ class NodeEmbeddingEnhancer:
                 
         unique_paths.sort(key=len)
         return unique_paths[:max_paths]
+
+    async def compute_query_aware_ppr(
+        self,
+        seed_nodes: List[Dict],
+        top_ppr_nodes: int,
+        knowledge_graph_inst,
+        global_config: Dict[str, Any],
+        ll_keywords: str = "",
+        hl_keywords: str = ""
+    ) -> List[Dict]:
+        """Compute top PPR entities with query-aware weighting."""
+        if top_ppr_nodes <= 0:
+            return []
+
+        seed_entity_names = [
+            node.get("entity_name", "")
+            for node in seed_nodes
+            if node.get("entity_name")
+        ]
+        if not seed_entity_names:
+            logger.warning("No seed entities for PPR analysis")
+            return []
+
+        logger.info(f"PPR analysis from {len(seed_entity_names)} seed entities")
+
+        entity_similarities: Dict[str, float] = {}
+        if ll_keywords.strip():
+            try:
+                entities_vdb = global_config.get("entities_vdb")
+                if entities_vdb and hasattr(entities_vdb, "embedding_func"):
+                    embedding_func = entities_vdb.embedding_func
+                    if embedding_func and embedding_func.func:
+                        query_embedding = await embedding_func.func([ll_keywords])
+                        query_vec = np.array(query_embedding[0])
+
+                        entity_strs: List[str] = []
+                        entity_order: List[str] = []
+
+                        for seed_entity in seed_entity_names:
+                            seed_info = next(
+                                (node for node in seed_nodes if node.get("entity_name") == seed_entity),
+                                None
+                            )
+                            if seed_info and seed_info.get("entity_description"):
+                                entity_str = f"{seed_entity} {seed_info['entity_description']}"
+                                entity_strs.append(entity_str)
+                                entity_order.append(seed_entity)
+
+                        if entity_strs:
+                            batch_fallback = resolve_positive_int(global_config.get("llm_model_max_async", 4), 4)
+                            batch_size = resolve_positive_int(
+                                global_config.get("embedding_batch_size"),
+                                batch_fallback
+                            )
+                            entity_embeddings = await compute_embeddings_in_batches(
+                                entity_strs, embedding_func, batch_size
+                            )
+
+                            for idx, entity_embedding in enumerate(entity_embeddings):
+                                entity_vec = np.array(entity_embedding)
+                                similarity = cosine_similarity(query_vec, entity_vec)
+                                entity_name = entity_order[idx]
+                                entity_similarities[entity_name] = similarity
+
+                        logger.debug(f"Computed query-aware similarities for {len(entity_similarities)} seed entities")
+
+            except Exception as exc:
+                logger.warning(f"Could not compute query-aware similarities: {exc}")
+
+        relation_similarities: Dict[str, float] = {}
+        if hl_keywords.strip():
+            try:
+                relationships_vdb = global_config.get("relationships_vdb")
+                if relationships_vdb and hasattr(relationships_vdb, "embedding_func"):
+                    embedding_func = relationships_vdb.embedding_func
+                    if embedding_func and embedding_func.func:
+                        hl_query_embedding = await embedding_func.func([hl_keywords])
+                        hl_query_vec = np.array(hl_query_embedding[0])
+
+                        all_relations = await self.get_all_relations_cached(knowledge_graph_inst)
+
+                        rel_strs: List[str] = []
+                        rel_keywords_order: List[str] = []
+
+                        for relation in all_relations:
+                            rel_keywords = relation.get("keywords", "")
+                            if rel_keywords.strip():
+                                rel_str = (
+                                    f"{rel_keywords}\t{relation.get('source_id', '')}\n"
+                                    f"{relation.get('target_id', '')}\n{relation.get('description', '')}"
+                                )
+                                rel_strs.append(rel_str)
+                                rel_keywords_order.append(rel_keywords)
+
+                        if rel_strs:
+                            batch_fallback = resolve_positive_int(global_config.get("llm_model_max_async", 4), 4)
+                            batch_size = resolve_positive_int(
+                                global_config.get("embedding_batch_size"),
+                                batch_fallback
+                            )
+                            rel_embeddings = await compute_embeddings_in_batches(
+                                rel_strs, embedding_func, batch_size
+                            )
+
+                            for idx, rel_embedding in enumerate(rel_embeddings):
+                                rel_vec = np.array(rel_embedding)
+                                similarity = cosine_similarity(hl_query_vec, rel_vec)
+                                rel_keywords = rel_keywords_order[idx]
+                                relation_similarities[rel_keywords] = similarity
+
+                        logger.debug(f"Computed query-aware relation similarities for {len(relation_similarities)} relations")
+
+            except Exception as exc:
+                logger.warning(f"Could not compute relation similarities: {exc}")
+
+        ppr_scores = self.compute_personalized_pagerank(
+            seed_entity_names,
+            entity_similarities if entity_similarities else None,
+            relation_similarities if relation_similarities else None,
+            tau=0.1,
+            alpha=0.3
+        )
+
+        if not ppr_scores:
+            logger.warning("No Personalized PageRank scores computed")
+            return []
+
+        all_entities = [
+            (entity_name, score)
+            for entity_name, score in ppr_scores.items()
+            if entity_name not in seed_entity_names
+        ]
+        if not all_entities:
+            logger.warning("No entities found for PPR ranking")
+            return []
+
+        all_entities.sort(key=lambda x: x[1], reverse=True)
+        top_entities = all_entities[:top_ppr_nodes]
+
+        logger.info(f"PPR selected top {len(top_entities)} entities from {len(all_entities)} total entities")
+
+        top_entity_names = [entity_name for entity_name, _ in top_entities]
+        nodes_dict = await knowledge_graph_inst.get_nodes_batch(top_entity_names)
+
+        ppr_entities: List[Dict] = []
+        for entity_name, ppr_score in top_entities:
+            entity_data = (nodes_dict or {}).get(entity_name)
+            if entity_data:
+                entity_copy = dict(entity_data)
+                entity_copy.update({
+                    "entity_name": entity_name,
+                    "pagerank_score": ppr_score,
+                    "discovery_method": "ppr_analysis",
+                    "rank": entity_data.get("degree", 0),
+                })
+                ppr_entities.append(entity_copy)
+
+        logger.info(
+            "PPR analysis completed: %d entities with avg PageRank: %.4f",
+            len(ppr_entities),
+            (sum(e["pagerank_score"] for e in ppr_entities) / len(ppr_entities)) if ppr_entities else 0.0,
+        )
+        return ppr_entities
+
+    async def compute_adaptive_fastrp(
+        self,
+        seed_nodes: List[Dict],
+        top_fastrp_nodes: int,
+        knowledge_graph_inst
+    ) -> List[Dict]:
+        """Compute top FastRP entities using vectorized similarities."""
+        if top_fastrp_nodes <= 0:
+            return []
+
+        seed_entity_names = [
+            node.get("entity_name", "")
+            for node in seed_nodes
+            if node.get("entity_name")
+        ]
+        if not seed_entity_names:
+            logger.warning("No seed entities for FastRP analysis")
+            return []
+
+        if not hasattr(self, "fastrp_embeddings") or not self.fastrp_embeddings:
+            logger.warning("FastRP embeddings not available for FastRP analysis")
+            return []
+
+        logger.info(f"FastRP analysis from {len(seed_entity_names)} seed entities")
+
+        candidate_scores = compute_adaptive_fastrp_batch(
+            seed_entity_names,
+            self,
+        )
+
+        if not candidate_scores:
+            logger.warning("No valid FastRP candidates found")
+            return []
+
+        sorted_candidates = sorted(
+            candidate_scores.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )
+        top_candidates = sorted_candidates[:top_fastrp_nodes]
+
+        top_entity_names = [entity_name for entity_name, _ in top_candidates]
+        nodes_dict = await knowledge_graph_inst.get_nodes_batch(top_entity_names)
+
+        top_smart_entities: List[Dict] = []
+        for entity_name, similarity in top_candidates:
+            entity_data = (nodes_dict or {}).get(entity_name)
+            if entity_data:
+                entity_copy = dict(entity_data)
+                entity_copy.update({
+                    "entity_name": entity_name,
+                    "adaptive_fastrp_similarity": similarity,
+                    "discovery_method": "fastrp_analysis",
+                    "rank": entity_data.get("degree", 0),
+                })
+                top_smart_entities.append(entity_copy)
+
+        logger.info(
+            "Adaptive FastRP selected top %d entities with avg similarity: %.4f",
+            len(top_smart_entities),
+            (sum(e["adaptive_fastrp_similarity"] for e in top_smart_entities) / len(top_smart_entities))
+            if top_smart_entities else 0.0,
+        )
+
+        return top_smart_entities
     
     def _save_persisted_data(self):
         """Save graph structure and embeddings to disk for query-time reuse."""

@@ -55,6 +55,10 @@ from .constants import (
     DEFAULT_SUMMARY_LANGUAGE,
 )
 from .kg.shared_storage import get_storage_keyed_lock
+from .gnn.node_embedding import (
+    compute_embeddings_in_batches as _compute_embeddings_in_batches,
+    resolve_positive_int as _resolve_positive_int,
+)
 import time
 from dotenv import load_dotenv
 
@@ -2986,8 +2990,8 @@ async def _semantic_expansion_plus_structural_analysis(
 
     # Find relations for PPR and FastRP entities in parallel
     ppr_relations, fastrp_relations = await asyncio.gather(
-        _find_relations_for_entities(ppr_entities, relationships_vdb),
-        _find_relations_for_entities(fastrp_entities, relationships_vdb)
+        _find_relations_for_entities(ppr_entities, relationships_vdb, knowledge_graph_inst),
+        _find_relations_for_entities(fastrp_entities, relationships_vdb, knowledge_graph_inst)
     )
     
     # Merge and deduplicate results from three sources
@@ -3017,167 +3021,19 @@ async def _independent_ppr_analysis(
         return []
     
     try:
-        # Get node embedding instance
         node_embedding = global_config.get("node_embedding")
         if not node_embedding:
             logger.warning("Node embedding not available for PPR analysis")
             return []
-        
-        # Extract seed entity names
-        seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
-        if not seed_entity_names:
-            logger.warning("No seed entities for PPR analysis")
-            return []
-        
-        logger.info(f"PPR analysis from {len(seed_entity_names)} seed entities")
 
-        # Compute query-aware seed weights if ll_keywords provided
-        entity_similarities = {}
-        if ll_keywords.strip():
-            try:
-                # Get entities vector database for similarity computation
-                entities_vdb = global_config.get("entities_vdb")
-                if entities_vdb and hasattr(entities_vdb, 'embedding_func'):
-                    # Compute query embedding
-                    embedding_func = entities_vdb.embedding_func
-                    if embedding_func and embedding_func.func:
-                        query_embedding = await embedding_func.func([ll_keywords])
-                        query_vec = np.array(query_embedding[0])
-
-                        # Prepare entity strings for batch embedding
-                        entity_strs = []
-                        entity_str_mapping = {}  # Maps index to entity_name
-
-                        for seed_entity in seed_entity_names:
-                            seed_info = next((node for node in seed_nodes if node.get("entity_name") == seed_entity), None)
-                            if seed_info and seed_info.get("entity_description"):
-                                entity_str = f"{seed_entity} {seed_info['entity_description']}"
-                                entity_str_mapping[len(entity_strs)] = seed_entity
-                                entity_strs.append(entity_str)
-
-                        if entity_strs:
-                            # Batch compute embeddings with concurrency control
-                            max_async = global_config.get("llm_model_max_async", 4)
-                            semaphore = asyncio.Semaphore(max_async)
-
-                            async def compute_with_limit(entity_str):
-                                async with semaphore:
-                                    return await embedding_func.func([entity_str])
-
-                            # Parallel embedding computation
-                            tasks = [compute_with_limit(entity_str) for entity_str in entity_strs]
-                            entity_embeddings = await asyncio.gather(*tasks)
-
-                            # Compute cosine similarities
-                            for idx, entity_embedding in enumerate(entity_embeddings):
-                                entity_vec = np.array(entity_embedding[0])
-                                similarity = cosine_similarity(query_vec, entity_vec)
-                                entity_name = entity_str_mapping[idx]
-                                entity_similarities[entity_name] = similarity
-
-                        logger.debug(f"Computed query-aware similarities for {len(entity_similarities)} seed entities")
-
-            except Exception as e:
-                logger.warning(f"Could not compute query-aware similarities: {e}")
-
-        # Phase 2: Compute relation similarities for edge reweighting
-        relation_similarities = {}
-        if hl_keywords.strip():
-            try:
-                # Get relationships vector database for similarity computation
-                relationships_vdb = global_config.get("relationships_vdb")
-                if relationships_vdb and hasattr(relationships_vdb, 'embedding_func'):
-                    # Compute hl_keywords embedding
-                    embedding_func = relationships_vdb.embedding_func
-                    if embedding_func and embedding_func.func:
-                        hl_query_embedding = await embedding_func.func([hl_keywords])
-                        hl_query_vec = np.array(hl_query_embedding[0])
-
-                        # Get all relations from knowledge graph (with caching)
-                        all_relations = await node_embedding.get_all_relations_cached(knowledge_graph_inst)
-
-                        # Prepare relation strings for batch embedding
-                        rel_strs = []
-                        rel_str_mapping = {}  # Maps index to rel_keywords
-
-                        for relation in all_relations:
-                            rel_keywords = relation.get("keywords", "")
-                            if rel_keywords.strip():
-                                # Create relation string for embedding (matching multi-hop format)
-                                rel_str = f"{rel_keywords}\t{relation.get('source_id', '')}\n{relation.get('target_id', '')}\n{relation.get('description', '')}"
-                                rel_str_mapping[len(rel_strs)] = rel_keywords
-                                rel_strs.append(rel_str)
-
-                        if rel_strs:
-                            # Batch compute embeddings with concurrency control
-                            max_async = global_config.get("llm_model_max_async", 4)
-                            semaphore = asyncio.Semaphore(max_async)
-
-                            async def compute_with_limit(rel_str):
-                                async with semaphore:
-                                    return await embedding_func.func([rel_str])
-
-                            # Parallel embedding computation
-                            tasks = [compute_with_limit(rel_str) for rel_str in rel_strs]
-                            rel_embeddings = await asyncio.gather(*tasks)
-
-                            # Compute cosine similarities
-                            for idx, rel_embedding in enumerate(rel_embeddings):
-                                rel_vec = np.array(rel_embedding[0])
-                                similarity = cosine_similarity(hl_query_vec, rel_vec)
-                                rel_keywords = rel_str_mapping[idx]
-                                relation_similarities[rel_keywords] = similarity
-
-                        logger.debug(f"Computed query-aware relation similarities for {len(relation_similarities)} relations")
-
-            except Exception as e:
-                logger.warning(f"Could not compute relation similarities: {e}")
-
-        # Compute Personalized PageRank with both Phase 1 and Phase 2 enhancements
-        ppr_scores = node_embedding.compute_personalized_pagerank(
-            seed_entity_names,
-            entity_similarities=entity_similarities if entity_similarities else None,
-            relation_similarities=relation_similarities if relation_similarities else None,
-            tau=0.1,      # Temperature for softmax weighting (Phase 1)
-            alpha=0.3     # Edge reweighting strength (Phase 2)
+        return await node_embedding.compute_query_aware_ppr(
+            seed_nodes=seed_nodes,
+            top_ppr_nodes=query_param.top_ppr_nodes,
+            knowledge_graph_inst=knowledge_graph_inst,
+            global_config=global_config,
+            ll_keywords=ll_keywords,
+            hl_keywords=hl_keywords,
         )
-        if not ppr_scores:
-            logger.warning("No Personalized PageRank scores computed")
-            return []
-        
-        # Get all entities (excluding seeds) and sort by PPR score
-        all_entities = [
-            (entity_name, score) for entity_name, score in ppr_scores.items()
-            if entity_name not in seed_entity_names
-        ]
-        
-        if not all_entities:
-            logger.warning("No entities found for PPR ranking")
-            return []
-        
-        # Sort by PageRank score and select top N
-        all_entities.sort(key=lambda x: x[1], reverse=True)
-        top_entities = all_entities[:query_param.top_ppr_nodes]
-        
-        logger.info(f"PPR selected top {len(top_entities)} entities from {len(all_entities)} total entities")
-        
-        # Get entity details from knowledge graph
-        ppr_entities = []
-        for entity_name, ppr_score in top_entities:
-            entity_data = await knowledge_graph_inst.get_node(entity_name)
-            if entity_data:
-                entity_copy = dict(entity_data)
-                entity_copy.update({
-                    "entity_name": entity_name,
-                    "pagerank_score": ppr_score,
-                    "discovery_method": "ppr_analysis",
-                    "rank": entity_data.get("degree", 0),
-                })
-                ppr_entities.append(entity_copy)
-        
-        logger.info(f"PPR analysis completed: {len(ppr_entities)} entities with avg PageRank: {sum(e['pagerank_score'] for e in ppr_entities) / len(ppr_entities) if ppr_entities else 0:.4f}")
-        
-        return ppr_entities
         
     except Exception as e:
         logger.error(f"PPR analysis failed: {e}")
@@ -3196,72 +3052,16 @@ async def _independent_fastrp_analysis(
         return []
     
     try:
-        # Get node embedding instance
         node_embedding = global_config.get("node_embedding")
         if not node_embedding:
             logger.warning("Node embedding not available for FastRP analysis")
             return []
-        
-        # Extract seed entity names
-        seed_entity_names = [node.get("entity_name", "") for node in seed_nodes if node.get("entity_name")]
-        if not seed_entity_names:
-            logger.warning("No seed entities for FastRP analysis")
-            return []
-        
-        logger.info(f"FastRP analysis from {len(seed_entity_names)} seed entities")
-        
-        # Get all entities for similarity calculation
-        all_entity_names = list(node_embedding.fastrp_embeddings.keys())
-        candidate_entities = [name for name in all_entity_names if name not in seed_entity_names]
 
-        if not candidate_entities:
-            logger.warning("No candidate entities for FastRP analysis")
-            return []
-
-        # Calculate FastRP similarity for all candidates (fast, using precomputed embeddings)
-        candidates_with_scores = []
-        for entity_name in candidate_entities:
-            try:
-                adaptive_fastrp_similarity = _compute_adaptive_fastrp_similarity(
-                    entity_name, seed_entity_names, node_embedding
-                )
-                candidates_with_scores.append({
-                    "entity_name": entity_name,
-                    "adaptive_fastrp_similarity": adaptive_fastrp_similarity
-                })
-            except Exception as e:
-                logger.debug(f"Error computing FastRP similarity for {entity_name}: {e}")
-
-        if not candidates_with_scores:
-            logger.warning("No valid FastRP candidates found")
-            return []
-
-        # Sort by FastRP similarity and select top N entities
-        candidates_with_scores.sort(key=lambda x: x["adaptive_fastrp_similarity"], reverse=True)
-        top_candidates = candidates_with_scores[:query_param.top_fastrp_nodes]
-
-        # Batch fetch entity details for top candidates only
-        top_entity_names = [c["entity_name"] for c in top_candidates]
-        nodes_dict = await knowledge_graph_inst.get_nodes_batch(top_entity_names)
-
-        # Combine similarity scores with entity details
-        top_smart_entities = []
-        for candidate in top_candidates:
-            entity_name = candidate["entity_name"]
-            entity_data = nodes_dict.get(entity_name)
-            if entity_data:
-                top_smart_entities.append({
-                    "entity_name": entity_name,
-                    "adaptive_fastrp_similarity": candidate["adaptive_fastrp_similarity"],
-                    "discovery_method": "fastrp_analysis",
-                    "rank": entity_data.get("degree", 0),
-                    **entity_data
-                })
-
-        logger.info(f"Adaptive FastRP selected top {len(top_smart_entities)} entities from {len(candidates_with_scores)} candidates")
-        logger.info(f"Adaptive FastRP analysis completed: avg similarity: {sum(e['adaptive_fastrp_similarity'] for e in top_smart_entities) / len(top_smart_entities) if top_smart_entities else 0:.4f}")
-
-        return top_smart_entities
+        return await node_embedding.compute_adaptive_fastrp(
+            seed_nodes=seed_nodes,
+            top_fastrp_nodes=query_param.top_fastrp_nodes,
+            knowledge_graph_inst=knowledge_graph_inst,
+        )
         
     except Exception as e:
         logger.error(f"FastRP analysis failed: {e}")
@@ -3269,20 +3069,11 @@ async def _independent_fastrp_analysis(
 
 
 
-def _compute_adaptive_fastrp_similarity(target_entity: str, seed_entities: list[str], node_embedding) -> float:
-    """Compute Adaptive FastRP similarity using precomputed embeddings."""
-    try:
-        from lightrag.gnn.structural_similarity import compute_adaptive_fastrp_similarity
-        return compute_adaptive_fastrp_similarity(target_entity, seed_entities, node_embedding)
-    except Exception as e:
-        logger.error(f"Error computing adaptive fastrp similarity: {e}")
-        return 0.0
-
-
 async def _find_relations_for_entities(
     entities: list[dict],
     relationships_vdb: BaseVectorStorage,
-    max_concurrent: int = 30
+    knowledge_graph_inst: BaseGraphStorage | None = None,
+    max_concurrent: int = 30,
 ) -> list[dict]:
     """Find relations connecting given entities with parallel queries.
 
@@ -3297,6 +3088,81 @@ async def _find_relations_for_entities(
         entity_names = [e.get("entity_name", "") for e in entities]
         entity_names_set = set(entity_names)  # Convert to set for faster lookups
 
+        # ------------------------------------------------------------------
+        # Fast path: use knowledge graph adjacency to gather relations
+        # ------------------------------------------------------------------
+        if knowledge_graph_inst and entity_names_set:
+            try:
+                nodes_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(list(entity_names_set))
+
+                edge_pairs: list[dict[str, str]] = []
+                seen_edge_pairs: set[tuple[str, str]] = set()
+
+                for node_name, edges in nodes_edges_dict.items():
+                    for edge in edges or []:
+                        src_id, tgt_id = edge[0], edge[1]
+                        if src_id in entity_names_set and tgt_id in entity_names_set:
+                            canonical_pair = tuple(sorted((src_id, tgt_id)))
+                            if canonical_pair not in seen_edge_pairs:
+                                edge_pairs.append({"src": src_id, "tgt": tgt_id})
+                                seen_edge_pairs.add(canonical_pair)
+
+                if edge_pairs:
+                    edge_data = await knowledge_graph_inst.get_edges_batch(edge_pairs)
+                    relations = []
+                    for edge_pair in edge_pairs:
+                        src_id = edge_pair["src"]
+                        tgt_id = edge_pair["tgt"]
+                        edge_props = (
+                            edge_data.get((src_id, tgt_id))
+                            or edge_data.get((tgt_id, src_id))
+                        )
+                        if not edge_props:
+                            continue
+                        relation_info = {
+                            **edge_props,
+                            "src_id": edge_props.get("src_id", src_id),
+                            "tgt_id": edge_props.get("tgt_id", tgt_id),
+                            "description": edge_props.get("description", ""),
+                            "keywords": edge_props.get("keywords", ""),
+                            "rank": edge_props.get("rank", 0),
+                            "discovery_method": "entity_relation",
+                        }
+                        relations.append(relation_info)
+
+                    if relations:
+                        logger.debug(
+                            f"Found {len(relations)} relations via knowledge graph adjacency for {len(entity_names_set)} entities"
+                        )
+                        return relations
+            except Exception as kg_error:
+                logger.debug(
+                    f"Knowledge graph relation lookup failed, falling back to vector search: {kg_error}"
+                )
+
+        # ------------------------------------------------------------------
+        # Fallback: vector database queries (embedding + search)
+        # ------------------------------------------------------------------
+        # Pre-compute query embeddings once if possible
+        query_embeddings: dict[str, list[float]] = {}
+        embedding_func = getattr(relationships_vdb, "embedding_func", None)
+        if embedding_func and getattr(embedding_func, "func", None):
+            unique_entity_names = list(dict.fromkeys(entity_names))
+            batch_fallback = 16  # vector DB queries tolerate higher batch size
+            batch_size = _resolve_positive_int(
+                getattr(relationships_vdb, "global_config", {}).get("embedding_batch_size", None),
+                batch_fallback,
+            )
+            try:
+                embeddings = await _compute_embeddings_in_batches(
+                    unique_entity_names, embedding_func, batch_size
+                )
+                for name, embedding in zip(unique_entity_names, embeddings):
+                    query_embeddings[name] = embedding
+            except Exception as exc:
+                logger.debug(f"Relation embedding pre-compute failed, will fallback to inline embedding: {exc}")
+                query_embeddings = {}
+
         # Create semaphore for concurrency control
         semaphore = asyncio.Semaphore(max_concurrent)
 
@@ -3304,21 +3170,28 @@ async def _find_relations_for_entities(
             """Query relations for a single entity with semaphore control."""
             async with semaphore:
                 try:
-                    relation_results = await relationships_vdb.query(entity_name, top_k=10)
+                    relation_results = await relationships_vdb.query(
+                        entity_name,
+                        top_k=10,
+                        query_embedding=query_embeddings.get(entity_name),
+                    )
                     return relation_results
                 except Exception as e:
                     logger.debug(f"Error finding relations for {entity_name}: {e}")
                     return []
 
-        # Parallel query all entity relations
-        tasks = [query_entity_relations(entity_name) for entity_name in entity_names]
-        all_relation_results = await asyncio.gather(*tasks)
+        # Parallel query all entity relations (deduplicated)
+        unique_entity_order = list(dict.fromkeys(entity_names))
+        tasks = [query_entity_relations(entity_name) for entity_name in unique_entity_order]
+        unique_relation_results = await asyncio.gather(*tasks)
+        relation_lookup = dict(zip(unique_entity_order, unique_relation_results))
 
         # Process results and deduplicate
         seen_relations = set()
         relations = []
 
-        for relation_results in all_relation_results:
+        for entity_name in entity_names:
+            relation_results = relation_lookup.get(entity_name, [])
             for relation_data in relation_results:
                 src_id = relation_data.get("src_id", "")
                 tgt_id = relation_data.get("tgt_id", "")
@@ -3340,7 +3213,7 @@ async def _find_relations_for_entities(
                         relations.append(relation_info)
                         seen_relations.add(relation_key)
 
-        logger.debug(f"Found {len(relations)} relations for {len(entity_names)} entities")
+        logger.debug(f"Found {len(relations)} relations for {len(entity_names)} entities via vector search fallback")
         return relations
 
     except Exception as e:
