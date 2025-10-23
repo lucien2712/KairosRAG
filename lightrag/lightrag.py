@@ -3511,132 +3511,233 @@ class LightRAG:
         skipped_already_merged = 0  # Track entities that were already merged
         active_entities = set(range(len(entities)))  # Track which entities are still active
 
+        llm_concurrency_limit = max(1, getattr(self, "llm_model_max_async", 2))
+        llm_semaphore = asyncio.Semaphore(llm_concurrency_limit)
+
+        async def evaluate_pair_llm(
+            entity_a_id: str,
+            entity_b_id: str,
+            desc_a: str,
+            desc_b: str,
+        ):
+            """Call LLM to evaluate whether two entities should be merged."""
+            user_prompt = PROMPTS["entity_merge_user"].format(
+                a_entity_id=entity_a_id,
+                a_description=desc_a,
+                b_entity_id=entity_b_id,
+                b_description=desc_b,
+            )
+            messages = [
+                {"role": "system", "content": PROMPTS["entity_merge_system"]},
+                {"role": "user", "content": PROMPTS["entity_merge_examples"]},
+                {"role": "user", "content": user_prompt},
+            ]
+            async with llm_semaphore:
+                return await llm_with_tools.ainvoke(messages)
+
+        pending_tasks: list[dict[str, Any]] = []
+
+        async def process_next_pending_task():
+            nonlocal llm_evaluated_pairs, merged_pairs, cached_merges, cached_skips, skipped_already_merged
+
+            if not pending_tasks:
+                return
+
+            task_info = pending_tasks.pop(0)
+            task: asyncio.Task = task_info["task"]
+            i = task_info["i"]
+            j = task_info["j"]
+            entity_a_id = task_info["entity_a_id"]
+            entity_b_id = task_info["entity_b_id"]
+            similarity = task_info["similarity"]
+
+            try:
+                response = await task
+            except Exception as e:
+                print(f"Error processing pair ({entity_a_id}, {entity_b_id}): {str(e)}")
+                return
+
+            # Skip if entities already inactive (merged earlier)
+            if i not in active_entities or j not in active_entities:
+                return
+
+            # Fetch current descriptions (after any prior merges)
+            current_entity_a = await self.chunk_entity_relation_graph.get_node(entity_a_id)
+            current_entity_b = await self.chunk_entity_relation_graph.get_node(entity_b_id)
+
+            if current_entity_a is None or current_entity_b is None:
+                # Entities might have been removed due to earlier merges
+                active_entities.discard(i)
+                active_entities.discard(j)
+                return
+
+            current_desc_a = current_entity_a.get("description", "")
+            current_desc_b = current_entity_b.get("description", "")
+
+            desc_a_used = task_info["initial_desc_a"]
+            desc_b_used = task_info["initial_desc_b"]
+
+            # Re-run LLM if entity descriptions changed since the initial evaluation
+            if current_desc_a != desc_a_used or current_desc_b != desc_b_used:
+                try:
+                    response = await evaluate_pair_llm(
+                        entity_a_id,
+                        entity_b_id,
+                        current_desc_a,
+                        current_desc_b,
+                    )
+                    desc_a_used = current_desc_a
+                    desc_b_used = current_desc_b
+                except Exception as e:
+                    print(f"Error re-evaluating pair ({entity_a_id}, {entity_b_id}): {str(e)}")
+                    return
+
+            decision = "skipped"
+            merge_successful = False
+
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                print(
+                    f"NEW MERGE: {entity_a_id} <- {entity_b_id} (similarity: {similarity:.3f})"
+                )
+
+                for call in response.tool_calls:
+                    if call["name"] == "merge_entities_tool":
+                        try:
+                            merge_result = await merge_entities_tool.ainvoke(call["args"])
+                            merge_successful = True
+                            break
+                        except Exception as e:
+                            print(f"TOOL EXECUTION FAILED: {str(e)}")
+                            merge_successful = False
+                            break
+
+                if merge_successful:
+                    updated_node = await self.chunk_entity_relation_graph.get_node(
+                        entity_a_id
+                    )
+                    if updated_node and "description" in updated_node:
+                        entities[i]["description"] = updated_node["description"]
+
+                    active_entities.discard(j)
+                    merged_pairs += 1
+                    decision = "merged"
+                else:
+                    decision = "skipped"
+
+            # Cache decision using latest descriptions
+            content_a_final = f"{entity_a_id}|{desc_a_used}"
+            content_b_final = f"{entity_b_id}|{desc_b_used}"
+            hash_a_final = hashlib.md5(content_a_final.encode("utf-8")).hexdigest()
+            hash_b_final = hashlib.md5(content_b_final.encode("utf-8")).hexdigest()
+            pair_key_final = f"{min(hash_a_final, hash_b_final)}_{max(hash_a_final, hash_b_final)}"
+
+            entity_pair_cache[pair_key_final] = {
+                "decision": decision,
+                "similarity": float(similarity),
+                "timestamp": time_module.strftime("%Y-%m-%d %H:%M:%S"),
+                "entity_a_id": entity_a_id,
+                "entity_b_id": entity_b_id,
+            }
+
+            # Update statistics for LLM evaluations (count once per final evaluation)
+            llm_evaluated_pairs += 1
+
         for i, j, similarity in candidate_pairs:
             # Skip if either entity has already been merged
             if i not in active_entities or j not in active_entities:
                 continue
-                
+
             entity_a = entities[i]
             entity_b = entities[j]
-            
+
             # Create hash key for this entity pair based on content (not ID)
             content_a = f"{entity_a['entity_id']}|{entity_a['description']}"
             content_b = f"{entity_b['entity_id']}|{entity_b['description']}"
-            hash_a = hashlib.md5(content_a.encode('utf-8')).hexdigest()
-            hash_b = hashlib.md5(content_b.encode('utf-8')).hexdigest()
-            
+            hash_a = hashlib.md5(content_a.encode("utf-8")).hexdigest()
+            hash_b = hashlib.md5(content_b.encode("utf-8")).hexdigest()
+
             # Create consistent pair key (sorted to ensure consistent ordering)
             pair_key = f"{min(hash_a, hash_b)}_{max(hash_a, hash_b)}"
-            
+
             # Check cache first
             if pair_key in entity_pair_cache:
+                # Process any pending asynchronous evaluations before applying cached decision
+                while pending_tasks:
+                    await process_next_pending_task()
+
                 cached_result = entity_pair_cache[pair_key]
-                # Only show summary for cached pairs, not detailed logs
-                
-                if cached_result['decision'] == 'merged':
+
+                if cached_result["decision"] == "merged":
                     cached_merges += 1
 
-                    # Check if both entities still exist in the graph before merging
                     try:
-                        # Get current entities from graph to check existence
-                        current_entities = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
-                        target_entities = await self.chunk_entity_relation_graph.get_node(entity_b['entity_id'])
+                        current_entities = await self.chunk_entity_relation_graph.get_node(
+                            entity_a["entity_id"]
+                        )
+                        target_entities = await self.chunk_entity_relation_graph.get_node(
+                            entity_b["entity_id"]
+                        )
 
                         if current_entities is None or target_entities is None:
-                            # One or both entities no longer exist, skip this cached merge
                             skipped_already_merged += 1
-                            active_entities.discard(j)  # Remove from active set anyway
-                            print(f"SKIPPED: Entities already merged - {entity_a['entity_id']} & {entity_b['entity_id']}")
+                            active_entities.discard(j)
+                            print(
+                                f"SKIPPED: Entities already merged - {entity_a['entity_id']} & {entity_b['entity_id']}"
+                            )
                             continue
 
-                        # Both entities exist, proceed with cached merge
-                        # Use merge_entities_tool to ensure summarization is applied
-                        result = await merge_entities_tool.ainvoke({
-                            "a_entity_id": entity_a['entity_id'],
-                            "b_entity_id": entity_b['entity_id']
-                        })
+                        result = await merge_entities_tool.ainvoke(
+                            {
+                                "a_entity_id": entity_a["entity_id"],
+                                "b_entity_id": entity_b["entity_id"],
+                            }
+                        )
 
-                        # Update entities list with the new merged description
-                        # This is critical for transitive merges (e.g., A←B, then A←C)
-                        updated_node = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
-                        if updated_node and 'description' in updated_node:
-                            entities[i]['description'] = updated_node['description']
+                        updated_node = await self.chunk_entity_relation_graph.get_node(
+                            entity_a["entity_id"]
+                        )
+                        if updated_node and "description" in updated_node:
+                            entities[i]["description"] = updated_node["description"]
 
                         active_entities.discard(j)
                         merged_pairs += 1
-                        # Don't print anything for cached merges
                     except Exception as e:
                         print(f"Failed to apply cached merge: {e}")
                 else:
                     cached_skips += 1
-                # For 'skipped' decisions, we just continue to next pair (silently)
                 continue
-                
-            # Prepare LLM prompt for new evaluation
-            user_prompt = PROMPTS["entity_merge_user"].format(
-                a_entity_id=entity_a['entity_id'],
-                a_description=entity_a['description'],
-                b_entity_id=entity_b['entity_id'],
-                b_description=entity_b['description']
+
+            # Schedule new LLM evaluation with concurrency control
+            task = asyncio.create_task(
+                evaluate_pair_llm(
+                    entity_a["entity_id"],
+                    entity_b["entity_id"],
+                    entity_a["description"],
+                    entity_b["description"],
+                )
             )
-            
-            try:
-                # Call LLM with tools
-                response = await llm_with_tools.ainvoke([
-                    {"role": "system", "content": PROMPTS["entity_merge_system"]},
-                    {"role": "user", "content": PROMPTS["entity_merge_examples"]},
-                    {"role": "user", "content": user_prompt},
-                ])
-                
-                llm_evaluated_pairs += 1
-                
-                # Check if LLM called the merge tool using proper LangChain method
-                if hasattr(response, 'tool_calls') and response.tool_calls:
-                    print(f"NEW MERGE: {entity_a['entity_id']} <- {entity_b['entity_id']} (similarity: {similarity:.3f})")
 
-                    # Execute tool calls manually (following your correct example)
-                    merge_successful = False
-                    for call in response.tool_calls:
-                        if call["name"] == "merge_entities_tool":
-                            try:
-                                # Execute the tool with the called arguments
-                                result = await merge_entities_tool.ainvoke(call["args"])
-                                # print(f"Tool execution result: {result}")
-                                merge_successful = True
-                                break
-                            except Exception as e:
-                                # print(f"TOOL EXECUTION FAILED: {str(e)}")
-                                break
-
-                    if merge_successful:
-                        # Update entities list with the new merged description
-                        # This is critical for transitive merges (e.g., A←B, then A←C)
-                        updated_node = await self.chunk_entity_relation_graph.get_node(entity_a['entity_id'])
-                        if updated_node and 'description' in updated_node:
-                            entities[i]['description'] = updated_node['description']
-
-                        # Mark entity B as inactive after successful merge
-                        active_entities.discard(j)
-                        merged_pairs += 1
-                        decision = "merged"
-                    else:
-                        decision = "skipped"
-                else:
-                    decision = "skipped"
-                    
-                # Cache this decision
-                entity_pair_cache[pair_key] = {
-                    "decision": decision,
-                    "similarity": float(similarity),
-                    "timestamp": time_module.strftime("%Y-%m-%d %H:%M:%S"),
-                    "entity_a_id": entity_a['entity_id'],
-                    "entity_b_id": entity_b['entity_id']
+            pending_tasks.append(
+                {
+                    "task": task,
+                    "i": i,
+                    "j": j,
+                    "entity_a_id": entity_a["entity_id"],
+                    "entity_b_id": entity_b["entity_id"],
+                    "similarity": similarity,
+                    "initial_desc_a": entity_a["description"],
+                    "initial_desc_b": entity_b["description"],
                 }
-                
-            except Exception as e:
-                print(f"Error processing pair ({entity_a['entity_id']}, {entity_b['entity_id']}): {str(e)}")
-                continue
+            )
+
+            # If concurrency limit reached, process the oldest pending task
+            if len(pending_tasks) >= llm_concurrency_limit:
+                await process_next_pending_task()
         
+        # Process remaining pending evaluations
+        while pending_tasks:
+            await process_next_pending_task()
+
         processing_time = time_module.time() - start_time
         remaining_entities = len(active_entities)
 
