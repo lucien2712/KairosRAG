@@ -3511,7 +3511,7 @@ class LightRAG:
         skipped_already_merged = 0  # Track entities that were already merged
         active_entities = set(range(len(entities)))  # Track which entities are still active
 
-        llm_concurrency_limit = max(1, getattr(self, "llm_model_max_async", 2))
+        llm_concurrency_limit = max(1, getattr(self, "llm_model_max_async", 4))
         llm_semaphore = asyncio.Semaphore(llm_concurrency_limit)
 
         async def evaluate_pair_llm(
