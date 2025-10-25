@@ -3088,9 +3088,7 @@ async def _find_relations_for_entities(
         entity_names = [e.get("entity_name", "") for e in entities]
         entity_names_set = set(entity_names)  # Convert to set for faster lookups
 
-        # ------------------------------------------------------------------
         # Fast path: use knowledge graph adjacency to gather relations
-        # ------------------------------------------------------------------
         if knowledge_graph_inst and entity_names_set:
             try:
                 nodes_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(list(entity_names_set))
@@ -3140,9 +3138,7 @@ async def _find_relations_for_entities(
                     f"Knowledge graph relation lookup failed, falling back to vector search: {kg_error}"
                 )
 
-        # ------------------------------------------------------------------
         # Fallback: vector database queries (embedding + search)
-        # ------------------------------------------------------------------
         # Pre-compute query embeddings once if possible
         query_embeddings: dict[str, list[float]] = {}
         embedding_func = getattr(relationships_vdb, "embedding_func", None)
