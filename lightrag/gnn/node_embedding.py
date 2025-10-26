@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Node embedding enhancer using FastRP and Personalized PageRank."""
+"""Node embedding enhancer using FastRP embeddings and query-aware Personalized PageRank."""
 
 import numpy as np
 import networkx as nx
@@ -53,38 +53,36 @@ async def compute_embeddings_in_batches(
 
 @dataclass
 class NodeEmbeddingConfig:
-    """Configuration for FastRP and Personalized PageRank."""
-    
+    """Configuration for FastRP embeddings and query-aware Personalized PageRank."""
+
     # FastRP parameters
     embedding_dimension: int = 256
     normalization_strength: float = -0.1
     iteration_weights: List[float] = field(default_factory=lambda: [1.0, 1.0, 0.5, 0.25])
     random_seed: Optional[int] = 42
-    
-    # Personalized PageRank parameters  
+
+    # Personalized PageRank parameters (used at query time)
     pagerank_alpha: float = 0.85  # Damping parameter
     pagerank_max_iter: int = 100
     pagerank_tol: float = 1e-06
 
 
 class NodeEmbeddingEnhancer:
-    """Enhances entity embeddings using FastRP and Personalized PageRank."""
+    """Enhances entity retrieval using FastRP embeddings and query-aware Personalized PageRank."""
     
     def __init__(self, config: NodeEmbeddingConfig, working_dir: str):
         self.config = config
         self.working_dir = working_dir
-        
+
         self.fastrp_embeddings: Optional[Dict[str, np.ndarray]] = None
-        self.pagerank_scores: Optional[Dict[str, float]] = None
         self.graph: Optional[nx.Graph] = None
         self._relations_cache: Optional[List[Dict]] = None  # Cache for all relations
 
         # File paths for persistence
         self.graph_path = os.path.join(working_dir, "node_embedding_graph.pkl")
         self.fastrp_path = os.path.join(working_dir, "fastrp_embeddings.pkl")
-        self.pagerank_path = os.path.join(working_dir, "pagerank_scores.json")
         self.relations_cache_path = os.path.join(working_dir, "relations_cache.pkl")
-        
+
         # Try to load existing data
         self._load_persisted_data()
         
@@ -129,16 +127,13 @@ class NodeEmbeddingEnhancer:
             
         # 2. Compute FastRP embeddings
         self.fastrp_embeddings = await self._compute_fastrp_embeddings()
-        
-        # 3. Compute Personalized PageRank scores
-        self.pagerank_scores = self._compute_pagerank_scores()
-        
-        # 4. Save computed data to disk for query-time reuse
+
+        # 3. Save computed data to disk for query-time reuse
         self._save_persisted_data()
-        
-        logger.info(f"FastRP + PageRank computation completed for {len(self.fastrp_embeddings)} entities")
-        # Note: In dual-path approach, we don't return mixed embeddings
-        # Instead, FastRP embeddings and PageRank scores are used separately
+
+        logger.info(f"FastRP embeddings computed for {len(self.fastrp_embeddings)} entities")
+        # Note: FastRP embeddings are stored separately for query-time similarity computation
+        # Personalized PageRank is computed dynamically at query time with query-aware weighting
         return {}
         
     def _build_networkx_graph(self, entities: List[Dict], relations: List[Dict]) -> nx.Graph:
@@ -239,25 +234,6 @@ class NodeEmbeddingEnhancer:
             return {node: np.random.normal(0, 0.1, self.config.embedding_dimension) 
                    for node in self.graph.nodes()}
                    
-                   
-    def _compute_pagerank_scores(self) -> Dict[str, float]:
-        """Compute standard PageRank scores for all nodes."""
-        try:
-            pagerank_scores = nx.pagerank(
-                self.graph,
-                alpha=self.config.pagerank_alpha,
-                max_iter=self.config.pagerank_max_iter,
-                tol=self.config.pagerank_tol
-            )
-            logger.info(f"PageRank scores computed for {len(pagerank_scores)} nodes")
-            return pagerank_scores
-            
-        except Exception as e:
-            logger.error(f"Error computing PageRank scores: {e}")
-            # Fallback to uniform scores
-            num_nodes = len(self.graph.nodes())
-            return {node: 1.0/num_nodes for node in self.graph.nodes()}
-            
     async def get_all_relations_cached(self, knowledge_graph_inst) -> List[Dict]:
         """Get all relations with caching to avoid repeated full-graph queries."""
         if self._relations_cache is None:
@@ -667,13 +643,7 @@ class NodeEmbeddingEnhancer:
                 with open(self.fastrp_path, 'wb') as f:
                     pickle.dump(self.fastrp_embeddings, f)
                 logger.info(f"Saved FastRP embeddings for {len(self.fastrp_embeddings)} entities")
-            
-            # Save PageRank scores (JSON for readability)
-            if self.pagerank_scores:
-                with open(self.pagerank_path, 'w') as f:
-                    json.dump(self.pagerank_scores, f, indent=2)
-                logger.info(f"Saved PageRank scores for {len(self.pagerank_scores)} entities")
-                
+
         except Exception as e:
             logger.error(f"Error saving node embedding data: {e}")
     
@@ -692,12 +662,6 @@ class NodeEmbeddingEnhancer:
                     self.fastrp_embeddings = pickle.load(f)
                 logger.info(f"Loaded FastRP embeddings for {len(self.fastrp_embeddings)} entities")
 
-            # Load PageRank scores
-            if os.path.exists(self.pagerank_path):
-                with open(self.pagerank_path, 'r') as f:
-                    self.pagerank_scores = json.load(f)
-                logger.info(f"Loaded PageRank scores for {len(self.pagerank_scores)} entities")
-
             # Load Relations cache
             if os.path.exists(self.relations_cache_path):
                 with open(self.relations_cache_path, 'rb') as f:
@@ -709,7 +673,6 @@ class NodeEmbeddingEnhancer:
             # Reset to empty state
             self.graph = None
             self.fastrp_embeddings = None
-            self.pagerank_scores = None
             self._relations_cache = None
 
     def _compute_query_aware_weights(
