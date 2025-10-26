@@ -3898,60 +3898,96 @@ class LightRAG:
 
             logger.info(f"Processing {len(file_text_pairs)} documents for entity type augmentation")
 
-            # Step 3: Process files with LLM to suggest new entity types (with parallel processing)
+            # Step 3: Process files with LLM to suggest new entity types (with periodic refinement)
+            # Dynamically adjust refinement interval based on max_async:
+            # - Small max_async (<10): refine more frequently to match parallel capacity and provide timely updates
+            # - Large max_async (>=10): cap at 10 to maintain stable refinement frequency and avoid excessive LLM calls
+            max_async = self.llm_model_max_async
+            REFINE_INTERVAL = min(10, max_async)
             all_new_entity_types = []
 
             # Use llm_model_max_async for concurrency control
-            max_async = self.llm_model_max_async
             semaphore = asyncio.Semaphore(max_async)
-            logger.info(f"Processing files in parallel with max_async={max_async}")
+            logger.info(f"Processing files with max_async={max_async}, refinement every {REFINE_INTERVAL} files")
 
-            async def process_file_with_limit(file_name: str, text_content: str):
+            async def process_file_with_limit(file_name: str, text_content: str, entity_types: list):
                 async with semaphore:
-                    logger.info(f"Processing file: {file_name}")
-                    return await self._process_file_with_llm(text_content, current_entity_types)
+                    logger.debug(f"Processing file: {file_name}")
+                    return await self._process_file_with_llm(text_content, entity_types)
 
-            # Create tasks for all files
-            tasks = [
-                process_file_with_limit(file_name, text_content)
-                for file_name, text_content in file_text_pairs
-            ]
+            # Process files in batches of REFINE_INTERVAL
+            total_files = len(file_text_pairs)
+            processed_count = 0
 
-            # Execute in parallel with progress tracking
-            results = await asyncio.gather(*tasks)
+            for batch_start in range(0, total_files, REFINE_INTERVAL):
+                batch_end = min(batch_start + REFINE_INTERVAL, total_files)
+                batch = file_text_pairs[batch_start:batch_end]
+                batch_size = len(batch)
 
-            # Collect all results
-            for new_entity_types in results:
-                all_new_entity_types.extend(new_entity_types)
+                logger.info(f"Processing batch {batch_start + 1}-{batch_end}/{total_files} ({batch_size} files)")
 
-            logger.info(f"Processed {len(file_text_pairs)}/{len(file_text_pairs)} files")
-            
-            # Step 4: Combine and refine entity types
-            combined_entity_types = current_entity_types + all_new_entity_types
-            logger.info(f"Combined {len(current_entity_types)} existing + {len(all_new_entity_types)} new = {len(combined_entity_types)} total entity types")
-            
-            # Step 5: Use LLM to remove duplicates and similar types
-            refined_entity_types = await self._refine_entity_types(combined_entity_types)
-            
-            # Step 6: Save refined entity types
+                # Create tasks for current batch using current_entity_types
+                tasks = [
+                    process_file_with_limit(file_name, text_content, current_entity_types)
+                    for file_name, text_content in batch
+                ]
+
+                # Execute batch in parallel
+                results = await asyncio.gather(*tasks)
+
+                # Collect results from this batch
+                for new_entity_types in results:
+                    all_new_entity_types.extend(new_entity_types)
+
+                processed_count += batch_size
+                logger.info(f"Completed {processed_count}/{total_files} files")
+
+                # Perform refinement after each batch (except for the last batch if it will be refined at the end)
+                if batch_end < total_files or batch_end == total_files:
+                    logger.info(f"🔄 Performing refinement after {processed_count} files...")
+
+                    # Combine current entity types with new suggestions
+                    combined_entity_types = current_entity_types + all_new_entity_types
+                    logger.debug(f"Combined {len(current_entity_types)} existing + {len(all_new_entity_types)} new = {len(combined_entity_types)} total")
+
+                    # Refine to remove duplicates
+                    refined_entity_types = await self._refine_entity_types(combined_entity_types)
+
+                    # Update current_entity_types for next batch
+                    current_entity_types = refined_entity_types
+                    all_new_entity_types = []  # Clear accumulated suggestions
+
+                    # Save intermediate results
+                    self._save_entity_types(refined_entity_types)
+
+                    logger.info(f"✅ Refinement completed. Current entity types: {len(refined_entity_types)}")
+
+            # Use the final refined entity types
+            refined_entity_types = current_entity_types
+            logger.info(f"All files processed. Final entity types: {len(refined_entity_types)}")
+
+            # Step 6: Save final entity types (already saved during periodic refinement, but ensure final state)
             self._save_entity_types(refined_entity_types)
-            
+
             # Step 7: Update processing status
             self._update_processing_status(file_text_pairs)
-            
+
             # Step 8: Reload entity types into addon_params for immediate use
             self._update_entity_types_from_working_dir()
-            
+
             logger.info(f"Entity type augmentation completed: {len(refined_entity_types)} total entity types")
             logger.info("Entity types have been automatically reloaded for immediate use")
-            
+
+            # Calculate initial entity count for return value
+            initial_entity_types_count = len(self._load_existing_entity_types())
+
             return {
                 "status": "success",
                 "message": "Entity type augmentation completed successfully",
-                "existing_entity_types": len(current_entity_types),
-                "suggested_new_types": len(all_new_entity_types),
+                "initial_entity_types": initial_entity_types_count,
                 "final_entity_types": len(refined_entity_types),
                 "processed_files": len(file_text_pairs),
+                "refinement_cycles": (total_files + REFINE_INTERVAL - 1) // REFINE_INTERVAL,
                 "entity_types": refined_entity_types
             }
             
