@@ -4871,8 +4871,6 @@ Knowledge Graph Data (Relationship):
                 
                 if chunk_tracking_log:
                     logger.info(f"chunks: {' '.join(chunk_tracking_log)}")
-        
-        logger.info(f"Final processed context: {len(entities_context)} entities, {len(relations_context)} relations, {len(text_units_context)} chunks")
 
     else:
         # No multi-hop expansion, but still need to process initial chunks
@@ -5159,38 +5157,38 @@ Knowledge Graph Data (Relationship):
             # Note: text_units_context already generated in else block above
             # No need to regenerate chunks here
 
-        # Final processed context log
-        logger.info(
-            f"Final processed context: {len(entities_context)} entities, "
-            f"{len(relations_context)} relations, {len(text_units_context)} chunks"
-        )
+    # Final processed context log
+    logger.info(
+        f"Final processed context: {len(entities_context)} entities, "
+        f"{len(relations_context)} relations, {len(text_units_context)} chunks"
+    )
 
     # Re-assign IDs after merging expanded data and potential enhancement
-        for i, entity in enumerate(entities_context):
-            entity["id"] = i + 1
-        for i, relation in enumerate(relations_context):
-            relation["id"] = i + 1
-        for i, chunk in enumerate(text_units_context):
-            chunk["id"] = i + 1
+    for i, entity in enumerate(entities_context):
+        entity["id"] = i + 1
+    for i, relation in enumerate(relations_context):
+        relation["id"] = i + 1
+    for i, chunk in enumerate(text_units_context):
+        chunk["id"] = i + 1
 
-        # Regenerate final result with updated context
-        # Remove internal fields before sending to LLM
-        fields_to_remove = {"source_id", "created_at", "file_path","id"}
-        entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
-        relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
-        chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
+    # Regenerate final result with updated context
+    # Remove internal fields before sending to LLM
+    fields_to_remove = {"source_id", "created_at", "file_path","id"}
+    entities_for_llm = [{k: v for k, v in e.items() if k not in fields_to_remove} for e in entities_context]
+    relations_for_llm = [{k: v for k, v in r.items() if k not in fields_to_remove} for r in relations_context]
+    chunks_for_llm = [{k: v for k, v in c.items() if k != "id"} for c in text_units_context]
 
-        # Choose format based on query_param.context_format
-        if query_param.context_format == "markdown":
-            chunks_section = format_chunks_markdown(chunks_for_llm)
-            entities_section = format_entities_markdown(entities_for_llm)
-            relations_section = format_relations_markdown(relations_for_llm)
-            result = f"{chunks_section}\n{entities_section}\n{relations_section}"
-        else:  # json format
-            chunks_section = format_chunks_json(chunks_for_llm)
-            entities_section = format_entities_json(entities_for_llm)
-            relations_section = format_relations_json(relations_for_llm)
-            result = f"{chunks_section}\n{entities_section}\n{relations_section}"
+    # Choose format based on query_param.context_format
+    if query_param.context_format == "markdown":
+        chunks_section = format_chunks_markdown(chunks_for_llm)
+        entities_section = format_entities_markdown(entities_for_llm)
+        relations_section = format_relations_markdown(relations_for_llm)
+        result = f"{chunks_section}\n{entities_section}\n{relations_section}"
+    else:  # json format
+        chunks_section = format_chunks_json(chunks_for_llm)
+        entities_section = format_entities_json(entities_for_llm)
+        relations_section = format_relations_json(relations_for_llm)
+        result = f"{chunks_section}\n{entities_section}\n{relations_section}"
 
     return result
 
