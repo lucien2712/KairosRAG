@@ -414,14 +414,11 @@ async def _batch_recognize_combined(
                     filtered_entities.append(entity)
                     seen_entities.add(entity_name)
 
-    # Fallback: 如果全部被過濾，保留 top-3
-    if not filtered_entities and entities:
-        logger.warning("Recognition filtered all entities, keeping top 3 as fallback")
-        filtered_entities = entities[:3]
-
-    if not filtered_relations and relations:
-        logger.warning("Recognition filtered all relations, keeping top 3 as fallback")
-        filtered_relations = relations[:3]
+    # Fallback: 只有在 entities 和 relations 同時都被完全移除時，才保留全部
+    if not filtered_entities and not filtered_relations and (entities or relations):
+        logger.warning("Recognition filtered all entities AND relations, keeping all data as fallback")
+        filtered_entities = entities
+        filtered_relations = relations
 
     return filtered_entities, filtered_relations
 
