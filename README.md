@@ -4,42 +4,6 @@
 
 ## 🚀 Key Contributions
 
-### ⏳ **Automatic Timestamp Integration**
-
-* **Problem**: Time-sensitive documents lose context when temporal information is inconsistent.
-* **Solution**: KairosRAG automatically prefixes user-provided timestamps to entity and relation descriptions, ensuring consistent temporal alignment without relying on LLM memory.
-
-**Mathematical Framework:**
-
-$$Entity'(e, t) = T(t) \oplus Entity(e)$$
-$$Relation'(r, t) = T(t) \oplus Relation(r)$$
-
-where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatenation
-
-**Real-World Example:**
-
-**Single Document Processing:**
-
-*Original Entity Description:*
-> Apple is a technology company that reported strong iPhone sales performance
-
-*After Automatic Timestamp Prefixing (timestamp: "2024-Q3"):*
-> 2024-Q3: Apple is a technology company that reported strong iPhone sales performance
-
-**Multi-Document Merging:**
-
-*After inserting Q2 and Q3 documents:*
-> 2024-Q2: Apple reported iPhone revenue of $45.9 billion and Services revenue of $23.9 billion
->
-> 2024-Q3: Apple reported iPhone revenue of $39.3 billion and Services revenue of $24.2 billion
-
-**Token-Limit Exceeded with LLM Summary:**
-
-When accumulated descriptions exceed n tokens (e.g., after inserting 10+ quarterly documents), the system automatically triggers summarization:
-
-*LLM-Generated Summary:*
-> Apple demonstrated consistent performance across 2024 quarters. Key trends: iPhone revenue peaked at $45.9B (Q2), declined to $39.3B (Q3); Services grew from $23.9B to $24.2B; strong expansion in emerging markets; iPhone 16 series launched Q4; maintained 44-46% gross margins despite supply chain challenges.
-
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
@@ -148,6 +112,42 @@ where $q$ = user query, $e_i$ = entity/relation
 - **Filter Operation:**
 
 $$E_{filtered} = \{e_i \in E_{retrieved} | R(e_i) = \text{False}\}$$
+
+### ⏳ **Automatic Timestamp Integration**
+
+* **Problem**: Time-sensitive documents lose context when temporal information is inconsistent.
+* **Solution**: KairosRAG automatically prefixes user-provided timestamps to entity and relation descriptions, ensuring consistent temporal alignment without relying on LLM memory.
+
+**Mathematical Framework:**
+
+$$Entity'(e, t) = T(t) \oplus Entity(e)$$
+$$Relation'(r, t) = T(t) \oplus Relation(r)$$
+
+where $T(t)$ is the timestamp prefix function, $\oplus$ denotes string concatenation
+
+**Real-World Example:**
+
+**Single Document Processing:**
+
+*Original Entity Description:*
+> Apple is a technology company that reported strong iPhone sales performance
+
+*After Automatic Timestamp Prefixing (timestamp: "2024-Q3"):*
+> 2024-Q3: Apple is a technology company that reported strong iPhone sales performance
+
+**Multi-Document Merging:**
+
+*After inserting Q2 and Q3 documents:*
+> 2024-Q2: Apple reported iPhone revenue of $45.9 billion and Services revenue of $23.9 billion
+>
+> 2024-Q3: Apple reported iPhone revenue of $39.3 billion and Services revenue of $24.2 billion
+
+**Token-Limit Exceeded with LLM Summary:**
+
+When accumulated descriptions exceed n tokens (e.g., after inserting 10+ quarterly documents), the system automatically triggers summarization:
+
+*LLM-Generated Summary:*
+> Apple demonstrated consistent performance across 2024 quarters. Key trends: iPhone revenue peaked at $45.9B (Q2), declined to $39.3B (Q3); Services grew from $23.9B to $24.2B; strong expansion in emerging markets; iPhone 16 series launched Q4; maintained 44-46% gross margins despite supply chain challenges.
 
 ### 📊 **Table-Aware Document Processing**
 
