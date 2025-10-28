@@ -279,7 +279,25 @@ async def process_file_with_llm(
     _extract_json_callback,
     _process_large_file_callback
 ) -> list:
-    """Process a file with LLM to suggest new entity types with retry mechanism."""
+    """Process a file with LLM to suggest new entity types.
+
+    Automatically chunks documents that exceed 30000 tokens to avoid token limit issues.
+    """
+    # Check token count and pre-chunk if needed
+    try:
+        token_count = len(tokenizer.encode(file_content))
+        logger.debug(f"Document has {token_count} tokens")
+
+        # If document exceeds 30000 tokens, use chunking approach
+        if token_count > 30000:
+            logger.info(f"Document has {token_count} tokens (>30000), using chunking approach")
+            return await _process_large_file_callback(
+                file_content, current_entity_types
+            )
+    except Exception as e:
+        logger.warning(f"Could not count tokens, will attempt direct processing: {e}")
+
+    # For documents under 30000 tokens, process directly with retry mechanism
     max_retries = 3
     client = create_openai_client(tool_llm_model_name)
     current_entity_types_json = json.dumps(
@@ -317,27 +335,7 @@ async def process_file_with_llm(
                 continue
 
         except Exception as e:
-            error_msg = str(e).lower()
-
-            # Check if error is due to token/context limit exceeded
-            # Support multiple LLM providers' error message formats:
-            # - Mistral: "too large for model"
-            # - OpenAI: "context_length_exceeded" or "maximum context length"
-            # - General: "400" error code
-            is_token_limit_error = (
-                ("400" in error_msg and "too large" in error_msg) or
-                "context_length_exceeded" in error_msg or
-                ("maximum context length" in error_msg and "tokens" in error_msg)
-            )
-
-            if is_token_limit_error:
-                logger.warning(f"Document exceeds token limit, splitting into chunks for processing...")
-                # Use chunking fallback for large documents
-                return await _process_large_file_callback(
-                    file_content, current_entity_types
-                )
-
-            # For other errors, retry as before
+            # For any errors, retry
             logger.warning(f"Attempt {attempt + 1}/{max_retries}: Error processing file with LLM: {e}")
             if attempt < max_retries - 1:
                 continue
@@ -357,14 +355,13 @@ async def process_large_file_with_chunking(
     tokenizer,
     _extract_json_callback
 ) -> list:
-    """Process a large file by splitting into chunks when token limit is exceeded.
+    """Process a large file by splitting into chunks.
 
-    This function is called as a fallback when process_file_with_llm encounters
-    a 400 error due to token limit. It splits the file into manageable chunks,
+    This function splits large documents into manageable chunks,
     processes each chunk separately, and aggregates the results.
 
     Args:
-        file_content: The full text content that exceeded token limit
+        file_content: The full text content to process
         current_entity_types: List of existing entity types
         tool_llm_model_name: Model name to use
         tokenizer: Tokenizer for chunking
@@ -377,12 +374,12 @@ async def process_large_file_with_chunking(
 
     logger.info(f"Splitting large document into chunks for entity type extraction...")
 
-    # Split document into chunks (6000 tokens per chunk, 200 token overlap)
+    # Split document into chunks (30000 tokens per chunk, 500 token overlap)
     chunks = chunking_by_token_size(
         tokenizer=tokenizer,
         content=file_content,
-        max_token_size=6000,
-        overlap_token_size=200
+        max_token_size=30000,
+        overlap_token_size=500
     )
 
     logger.info(f"Split document into {len(chunks)} chunks")
