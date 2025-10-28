@@ -1,6 +1,5 @@
 from config import initialize_rag
 from lightrag import QueryParam
-from lightrag.rewriter import rewriter
 
 
 async def main():
@@ -15,11 +14,11 @@ async def main():
         """
 
         # 將時間相關模糊問題進行 rewrite
-        rewritten_query = rewriter(query)
-        print("Rewrite query: ", query)
+       
+        print("query: ", query)
 
         response, context = rag.query(
-            rewritten_query,
+            query,
             param=QueryParam(
                 mode="hybrid",
                 # conversation_history
