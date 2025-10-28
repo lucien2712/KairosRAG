@@ -404,9 +404,16 @@ class NodeEmbeddingEnhancer:
         knowledge_graph_inst,
         global_config: Dict[str, Any],
         ll_keywords: str = "",
-        hl_keywords: str = ""
+        hl_keywords: str = "",
+        query_ll_embedding: List[float] | None = None,
+        query_hl_embedding: List[float] | None = None,
     ) -> List[Dict]:
-        """Compute top PPR entities with query-aware weighting."""
+        """Compute top PPR entities with query-aware weighting.
+
+        Args:
+            query_ll_embedding: Pre-computed ll_keywords embedding (optional, for caching)
+            query_hl_embedding: Pre-computed hl_keywords embedding (optional, for caching)
+        """
         if top_ppr_nodes <= 0:
             return []
 
@@ -428,8 +435,14 @@ class NodeEmbeddingEnhancer:
                 if entities_vdb and hasattr(entities_vdb, "embedding_func"):
                     embedding_func = entities_vdb.embedding_func
                     if embedding_func and embedding_func.func:
-                        query_embedding = await embedding_func.func([ll_keywords])
-                        query_vec = np.array(query_embedding[0])
+                        # Use pre-computed embedding if available, otherwise compute it
+                        if query_ll_embedding is not None:
+                            query_vec = np.array(query_ll_embedding)
+                            logger.debug("Using pre-computed ll_keywords embedding for PPR Phase 1")
+                        else:
+                            query_embedding = await embedding_func.func([ll_keywords])
+                            query_vec = np.array(query_embedding[0])
+                            logger.debug("Computed ll_keywords embedding for PPR Phase 1")
 
                         entity_strs: List[str] = []
                         entity_order: List[str] = []
@@ -472,8 +485,14 @@ class NodeEmbeddingEnhancer:
                 if relationships_vdb and hasattr(relationships_vdb, "embedding_func"):
                     embedding_func = relationships_vdb.embedding_func
                     if embedding_func and embedding_func.func:
-                        hl_query_embedding = await embedding_func.func([hl_keywords])
-                        hl_query_vec = np.array(hl_query_embedding[0])
+                        # Use pre-computed embedding if available, otherwise compute it
+                        if query_hl_embedding is not None:
+                            hl_query_vec = np.array(query_hl_embedding)
+                            logger.debug("Using pre-computed hl_keywords embedding for PPR Phase 2")
+                        else:
+                            hl_query_embedding_result = await embedding_func.func([hl_keywords])
+                            hl_query_vec = np.array(hl_query_embedding_result[0])
+                            logger.debug("Computed hl_keywords embedding for PPR Phase 2")
 
                         all_relations = await self.get_all_relations_cached(knowledge_graph_inst)
 

@@ -3109,6 +3109,24 @@ async def _semantic_expansion_plus_structural_analysis(
 
     logger.info(f"Three-way parallel expansion with active methods: {', '.join(active_methods)}")
 
+    # Pre-compute query embeddings once for all methods (multi-hop + PPR)
+    query_ll_embedding = None
+    query_hl_embedding = None
+    try:
+        # Pre-compute LL query embedding if needed
+        if ll_keywords and entities_vdb.embedding_func and entities_vdb.embedding_func.func:
+            query_ll_result = await entities_vdb.embedding_func.func([ll_keywords])
+            query_ll_embedding = query_ll_result[0]
+
+        # Pre-compute HL query embedding if needed
+        if hl_keywords and relationships_vdb.embedding_func and relationships_vdb.embedding_func.func:
+            query_hl_result = await relationships_vdb.embedding_func.func([hl_keywords])
+            query_hl_embedding = query_hl_result[0]
+
+        logger.debug(f"Pre-computed query embeddings for all methods: ll={'✓' if query_ll_embedding is not None else '✗'}, hl={'✓' if query_hl_embedding is not None else '✗'}")
+    except Exception as e:
+        logger.debug(f"Error pre-computing query embeddings: {e}")
+
     # Prepare tasks for parallel execution
     tasks = []
     task_types = []
@@ -3123,14 +3141,16 @@ async def _semantic_expansion_plus_structural_analysis(
         )
         tasks.append(_original_multi_hop_expand(
             seed_nodes, ll_keywords, hl_keywords, multihop_param,
-            knowledge_graph_inst, entities_vdb, relationships_vdb
+            knowledge_graph_inst, entities_vdb, relationships_vdb,
+            query_ll_embedding, query_hl_embedding
         ))
         task_types.append("multihop")
 
     # Add PPR task if enabled
     if query_param.top_ppr_nodes > 0:
         tasks.append(_independent_ppr_analysis(
-            seed_nodes, query_param, knowledge_graph_inst, global_config, ll_keywords, hl_keywords
+            seed_nodes, query_param, knowledge_graph_inst, global_config,
+            ll_keywords, hl_keywords, query_ll_embedding, query_hl_embedding
         ))
         task_types.append("ppr")
 
@@ -3191,13 +3211,20 @@ async def _independent_ppr_analysis(
     knowledge_graph_inst: BaseGraphStorage,
     global_config: dict[str, str],
     ll_keywords: str = "",
-    hl_keywords: str = ""
+    hl_keywords: str = "",
+    query_ll_embedding: list[float] | None = None,
+    query_hl_embedding: list[float] | None = None,
 ) -> list[dict]:
-    """Independent PPR analysis with Phase 1 + Phase 2 query-aware enhancements - select top N entities by PageRank score."""
-    
+    """Independent PPR analysis with Phase 1 + Phase 2 query-aware enhancements - select top N entities by PageRank score.
+
+    Args:
+        query_ll_embedding: Pre-computed ll_keywords embedding (optional, for caching)
+        query_hl_embedding: Pre-computed hl_keywords embedding (optional, for caching)
+    """
+
     if query_param.top_ppr_nodes <= 0:
         return []
-    
+
     try:
         node_embedding = global_config.get("node_embedding")
         if not node_embedding:
@@ -3211,8 +3238,10 @@ async def _independent_ppr_analysis(
             global_config=global_config,
             ll_keywords=ll_keywords,
             hl_keywords=hl_keywords,
+            query_ll_embedding=query_ll_embedding,
+            query_hl_embedding=query_hl_embedding,
         )
-        
+
     except Exception as e:
         logger.error(f"PPR analysis failed: {e}")
         return []
@@ -3482,28 +3511,38 @@ async def _original_multi_hop_expand(
     knowledge_graph_inst: BaseGraphStorage,
     entities_vdb: BaseVectorStorage,
     relationships_vdb: BaseVectorStorage,
+    query_ll_embedding: list[float] | None = None,
+    query_hl_embedding: list[float] | None = None,
 ) -> tuple[list[dict], list[dict]]:
-    """Original multi-hop expansion logic (semantic path only)."""
-    
+    """Original multi-hop expansion logic (semantic path only).
+
+    Args:
+        query_ll_embedding: Pre-computed ll_keywords embedding (optional, for caching)
+        query_hl_embedding: Pre-computed hl_keywords embedding (optional, for caching)
+    """
+
     logger.info(f"Starting multi-hop expansion: max_hop={query_param.max_hop}, top_neighbors={query_param.top_neighbors}, threshold={query_param.multi_hop_relevance_threshold}")
-    
-    # Pre-compute query embeddings for performance optimization
-    query_ll_embedding = None
-    query_hl_embedding = None
-    try:
-        # Pre-compute LL query embedding
-        if ll_keywords and entities_vdb.embedding_func and entities_vdb.embedding_func.func:
-            query_ll_result = await entities_vdb.embedding_func.func([ll_keywords])
-            query_ll_embedding = query_ll_result[0]
-        
-        # Pre-compute HL query embedding  
-        if hl_keywords and relationships_vdb.embedding_func and relationships_vdb.embedding_func.func:
-            query_hl_result = await relationships_vdb.embedding_func.func([hl_keywords])
-            query_hl_embedding = query_hl_result[0]
-            
-        logger.debug(f"Pre-computed query embeddings: ll={'✓' if query_ll_embedding else '✗'}, hl={'✓' if query_hl_embedding else '✗'}")
-    except Exception as e:
-        logger.debug(f"Error pre-computing query embeddings: {e}")
+
+    # Use pre-computed embeddings if provided, otherwise compute them
+    # Note: Use 'is None' check to avoid ambiguous truth value errors with arrays
+    need_compute = (query_ll_embedding is None) or (query_hl_embedding is None)
+    if need_compute:
+        try:
+            # Pre-compute LL query embedding if not provided
+            if query_ll_embedding is None and ll_keywords and entities_vdb.embedding_func and entities_vdb.embedding_func.func:
+                query_ll_result = await entities_vdb.embedding_func.func([ll_keywords])
+                query_ll_embedding = query_ll_result[0]
+
+            # Pre-compute HL query embedding if not provided
+            if query_hl_embedding is None and hl_keywords and relationships_vdb.embedding_func and relationships_vdb.embedding_func.func:
+                query_hl_result = await relationships_vdb.embedding_func.func([hl_keywords])
+                query_hl_embedding = query_hl_result[0]
+
+            logger.debug(f"Computed missing query embeddings: ll={'✓' if query_ll_embedding is not None else '✗'}, hl={'✓' if query_hl_embedding is not None else '✗'}")
+        except Exception as e:
+            logger.debug(f"Error computing query embeddings: {e}")
+    else:
+        logger.debug(f"Using pre-computed query embeddings: ll={'✓' if query_ll_embedding is not None else '✗'}, hl={'✓' if query_hl_embedding is not None else '✗'}")
     
     all_expanded_entities = []
     all_expanded_relations = []
