@@ -96,3 +96,4 @@ benchmark.txt
 plan.txt
 query_mistral.py
 pipeline.txt
+*.png
