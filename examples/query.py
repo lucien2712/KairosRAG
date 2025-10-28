@@ -1,6 +1,6 @@
 from config import initialize_rag
 from lightrag import QueryParam
-
+import config
 
 async def main():
     try:

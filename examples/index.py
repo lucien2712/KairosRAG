@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import List, Tuple
 from config import initialize_rag
+import config
 
 
 def extract_txt_text(path: Path) -> str:
