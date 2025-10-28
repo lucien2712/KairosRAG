@@ -682,7 +682,7 @@ async def _handle_single_relationship_extraction(
 
         # Automatically prepend timestamp to description if provided and not already present
         if timestamp and timestamp.strip() and not edge_description.startswith(timestamp):
-            edge_description = f"{timestamp}: {edge_description}"
+            edge_description = f"[Time: {timestamp}] {edge_description}"
 
         edge_source_id = chunk_key
         weight = (
