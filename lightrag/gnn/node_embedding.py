@@ -154,7 +154,8 @@ class NodeEmbeddingEnhancer:
             if src and tgt and src in graph.nodes() and tgt in graph.nodes():
                 # Use weight if available, otherwise default to 1.0
                 weight = relation.get('weight', 1.0)
-                graph.add_edge(src, tgt, weight=weight)
+                keywords = relation.get('keywords', '')
+                graph.add_edge(src, tgt, weight=weight, keywords=keywords)
                 
         logger.info(f"Built graph with {len(graph.nodes())} nodes, {len(graph.edges())} edges")
         return graph
@@ -315,12 +316,11 @@ class NodeEmbeddingEnhancer:
                 # Temporarily set edge weights based on hl_keywords similarity
                 for u, v, edge_data in self.graph.edges(data=True):
                     edge_keywords = edge_data.get('keywords', '')
-                    if edge_keywords in relation_similarities:
-                        # Use similarity as weight directly
-                        similarity = relation_similarities[edge_keywords]
-                        self.graph[u][v]['temp_weight'] = max(0.1, similarity)  # Min weight 0.1
-                    else:
-                        self.graph[u][v]['temp_weight'] = 0.1  # Default low weight
+
+                    # Use similarity as weight directly
+                    similarity = relation_similarities[edge_keywords]
+                    self.graph[u][v]['temp_weight'] = similarity  # Min weight 0.05
+
 
                 # Compute PageRank with temporary weights
                 ppr_scores = nx.pagerank(
