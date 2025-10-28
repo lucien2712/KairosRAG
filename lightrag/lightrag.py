@@ -3265,7 +3265,7 @@ class LightRAG:
                     **edge_data
                 })
                 
-            logger.info(f"Computing FastRP and PPR embeddings for {len(entities)} entities and {len(relations)} relations")
+            logger.info(f"Computing FastRP embeddings for {len(entities)} entities and {len(relations)} relations")
             
             # Clear existing embeddings and compute fresh
             self.node_embedding.fastrp_embeddings = None
@@ -3278,9 +3278,9 @@ class LightRAG:
                 relations=relations, 
                 text_embeddings={}
             )
-            
-            logger.info("Successfully computed FastRP and PPR embeddings after document insertion")
-            
+
+            logger.info("Successfully computed FastRP embeddings after document insertion")
+
         except Exception as e:
             logger.error(f"Error computing node embeddings after insertion: {e}")
             # Don't raise the error to avoid breaking the insert process

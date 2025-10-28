@@ -636,7 +636,7 @@ class NodeEmbeddingEnhancer:
             if self.graph:
                 with open(self.graph_path, 'wb') as f:
                     pickle.dump(self.graph, f)
-                logger.info(f"Saved graph with {len(self.graph.nodes())} nodes to {self.graph_path}")
+                logger.info(f"Saved graph with {len(self.graph.nodes())} nodes")
             
             # Save FastRP embeddings
             if self.fastrp_embeddings:
