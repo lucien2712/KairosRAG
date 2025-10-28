@@ -210,6 +210,14 @@ class LightRAG:
         )
     )
 
+    # Orphaned node processing
+    # ---
+
+    process_orphaned_nodes: bool = field(
+        default=get_env_value("PROCESS_ORPHANED_NODES", True, bool)
+    )
+    """Enable LLM-based type and description generation for orphaned entities."""
+
     # Text chunking
     # ---
 
@@ -1729,7 +1737,9 @@ class LightRAG:
                                 global_config = asdict(self)
                                 if self.enable_node_embedding and hasattr(self, 'node_embedding'):
                                     global_config["node_embedding"] = self.node_embedding
-                                
+                                # Add text_chunks storage for orphaned entity timestamp retrieval
+                                global_config["text_chunks"] = self.text_chunks
+
                                 await merge_nodes_and_edges(
                                     chunk_results=chunk_results,  # result collected from entity_relation_task
                                     knowledge_graph_inst=self.chunk_entity_relation_graph,
@@ -1949,6 +1959,7 @@ class LightRAG:
                 chunk_content = sanitize_text_for_encoding(chunk_data["content"])
                 source_id = chunk_data["source_id"]
                 file_path = chunk_data.get("file_path", "custom_kg")
+                timestamp = chunk_data.get("timestamp", "")  # Get timestamp from chunk data
                 tokens = len(self.tokenizer.encode(chunk_content))
                 chunk_order_index = (
                     0
@@ -1966,6 +1977,7 @@ class LightRAG:
                     if full_doc_id is not None
                     else source_id,
                     "file_path": file_path,
+                    "timestamp": timestamp,  # Include timestamp in chunk entry
                     "status": DocStatus.PROCESSED,
                 }
                 all_chunks_data[chunk_id] = chunk_entry
@@ -2034,13 +2046,54 @@ class LightRAG:
                     if not (
                         await self.chunk_entity_relation_graph.has_node(need_insert_id)
                     ):
+                        # Generate high-quality description for orphaned entity if enabled
+                        entity_type = "UNKNOWN"
+                        entity_description = "UNKNOWN"
+
+                        if self.enable_llm and hasattr(self, '_generate_orphaned_entity_description'):
+                            try:
+                                from .operate import _generate_orphaned_entity_description
+                                from .utils import GRAPH_FIELD_SEP
+
+                                # Get timestamp from source chunk data
+                                timestamp = ""
+                                if self.text_chunks and source_id:
+                                    try:
+                                        # source_id could be comma-separated chunk keys from chunk_to_source_map
+                                        # Use the first chunk key to get timestamp
+                                        first_chunk_key = source_id.split(GRAPH_FIELD_SEP)[0] if GRAPH_FIELD_SEP in source_id else source_id
+                                        # Try to get chunk_id from chunk_to_source_map first
+                                        chunk_id = chunk_to_source_map.get(first_chunk_key, first_chunk_key)
+                                        chunk_data = await self.text_chunks.get_by_id(chunk_id)
+                                        if chunk_data and isinstance(chunk_data, dict):
+                                            timestamp = chunk_data.get("timestamp", "")
+                                    except Exception as e:
+                                        logger.debug(f"Failed to retrieve timestamp from chunk '{source_id}': {e}")
+
+                                entity_type, entity_description = await _generate_orphaned_entity_description(
+                                    entity_name=need_insert_id,
+                                    chunk_key_or_content=description,  # Use relationship description as context
+                                    relationship_desc=description,
+                                    entity_types=self.entity_types,
+                                    llm_model_func=self.llm_model_func,
+                                    text_chunks_storage=self.text_chunks,
+                                    language=self.language,
+                                )
+
+                                # Add timestamp prefix to entity description if available
+                                if timestamp and timestamp.strip() and not entity_description.startswith("[Time: "):
+                                    entity_description = f"[Time: {timestamp}] {entity_description}"
+                            except Exception as e:
+                                logger.error(f"Failed to generate description for orphaned entity '{need_insert_id}' in custom KG: {e}")
+                                # Keep UNKNOWN fallback values
+
                         await self.chunk_entity_relation_graph.upsert_node(
                             need_insert_id,
                             node_data={
                                 "entity_id": need_insert_id,
                                 "source_id": source_id,
-                                "description": "UNKNOWN",
-                                "entity_type": "UNKNOWN",
+                                "description": entity_description,
+                                "entity_type": entity_type,
                                 "file_path": file_path,
                                 "created_at": int(time.time()),
                             },

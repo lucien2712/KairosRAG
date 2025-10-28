@@ -1638,6 +1638,107 @@ async def _merge_nodes_then_upsert(
     return node_data
 
 
+async def _generate_orphaned_entity_description(
+    entity_name: str,
+    chunk_key_or_content: str,
+    relationship_desc: str,
+    entity_types: list[str],
+    llm_model_func,
+    text_chunks_storage: BaseKVStorage | None = None,
+    language: str = "English",
+) -> tuple[str, str]:
+    """
+    Generate entity type and description for orphaned entities using LLM.
+
+    Args:
+        entity_name: Name of the orphaned entity
+        chunk_key_or_content: Either a chunk key to lookup or direct content
+        relationship_desc: Description from the relationship that referenced this entity
+        entity_types: List of available entity types
+        llm_model_func: LLM function to use for generation
+        text_chunks_storage: Storage to retrieve chunks (if chunk_key is provided)
+        language: Language for the description
+
+    Returns:
+        tuple: (entity_type, description)
+    """
+    try:
+        # Get source chunk content
+        source_chunk = chunk_key_or_content
+        if text_chunks_storage and chunk_key_or_content:
+            # Try to retrieve from storage
+            try:
+                chunk_data = await text_chunks_storage.get_by_id(chunk_key_or_content)
+                if chunk_data and isinstance(chunk_data, dict):
+                    source_chunk = chunk_data.get("content", chunk_key_or_content)
+            except Exception:
+                # If retrieval fails, use the key as content
+                pass
+
+        # Prepare entity types string
+        entity_types_str = ", ".join(entity_types) if entity_types else "organization, person, geo, event"
+
+        # Build prompt
+        prompt = PROMPTS["orphaned_entity_description"].format(
+            entity_name=entity_name,
+            relationship_desc=relationship_desc,
+            source_chunk=source_chunk[:2000],  # Limit chunk size
+            entity_types=entity_types_str,
+            language=language,
+        )
+
+        # Call LLM
+        response = await llm_model_func(prompt, max_tokens=500)
+
+        # Parse response: (entity_type)<SEP>(description)
+        response = response.strip()
+
+        # Try to extract from code blocks if present
+        if "```" in response:
+            # Extract content between ``` markers
+            code_block_match = re.search(r'```(?:.*?)\n?(.*?)```', response, re.DOTALL)
+            if code_block_match:
+                response = code_block_match.group(1).strip()
+
+        # Parse the format
+        sep_pattern = r'\(([^)]+)\)<SEP>\((.+)\)'
+        match = re.match(sep_pattern, response, re.DOTALL)
+
+        if match:
+            entity_type = match.group(1).strip()
+            description = match.group(2).strip()
+        else:
+            # Try alternative parsing
+            if "<SEP>" in response:
+                parts = response.split("<SEP>", 1)
+                entity_type = parts[0].strip().strip("()")
+                description = parts[1].strip().strip("()") if len(parts) > 1 else relationship_desc
+            else:
+                # Fallback: use entity type from list and relationship description
+                logger.warning(f"Failed to parse LLM response for orphaned entity '{entity_name}', using fallback")
+                entity_type = entity_types[0] if entity_types else "Other"
+                description = f"{entity_name} is mentioned in relation to: {relationship_desc}"
+
+        # Validate entity type
+        if entity_type not in entity_types and entity_types:
+            # Try to find a match (case-insensitive)
+            matched_type = next((et for et in entity_types if et.lower() == entity_type.lower()), None)
+            if matched_type:
+                entity_type = matched_type
+            else:
+                entity_type = "Other"
+
+        logger.info(f"Generated description for orphaned entity '{entity_name}': type={entity_type}")
+        return entity_type, description
+
+    except Exception as e:
+        logger.error(f"Error generating description for orphaned entity '{entity_name}': {e}")
+        # Return fallback values
+        fallback_type = entity_types[0] if entity_types else "Other"
+        fallback_desc = f"{entity_name} is referenced in: {relationship_desc}"
+        return fallback_type, fallback_desc
+
+
 async def _merge_edges_then_upsert(
     src_id: str,
     tgt_id: str,
@@ -1759,11 +1860,55 @@ async def _merge_edges_then_upsert(
 
     for need_insert_id in [src_id, tgt_id]:
         if not (await knowledge_graph_inst.has_node(need_insert_id)):
+            # Generate high-quality description for orphaned entity if enabled
+            entity_type = "UNKNOWN"
+            entity_description = description
+
+            if global_config.get("process_orphaned_nodes", True):
+                try:
+                    # Get necessary parameters
+                    llm_model_func = global_config.get("llm_model_func")
+                    text_chunks_storage = global_config.get("text_chunks")
+                    entity_types = global_config.get("entity_types", DEFAULT_ENTITY_TYPES)
+                    language = global_config.get("language", DEFAULT_SUMMARY_LANGUAGE)
+
+                    if llm_model_func:
+                        # Get timestamp from source chunk data (not from relationship description)
+                        timestamp = ""
+                        if text_chunks_storage and source_id:
+                            try:
+                                # source_id might be comma-separated chunk keys, use the first one
+                                first_chunk_key = source_id.split(GRAPH_FIELD_SEP)[0] if GRAPH_FIELD_SEP in source_id else source_id
+                                chunk_data = await text_chunks_storage.get_by_id(first_chunk_key)
+                                if chunk_data and isinstance(chunk_data, dict):
+                                    timestamp = chunk_data.get("timestamp", "")
+                            except Exception as e:
+                                logger.debug(f"Failed to retrieve timestamp from chunk '{source_id}': {e}")
+
+                        entity_type, entity_description = await _generate_orphaned_entity_description(
+                            entity_name=need_insert_id,
+                            chunk_key_or_content=source_id,
+                            relationship_desc=description,
+                            entity_types=entity_types,
+                            llm_model_func=llm_model_func,
+                            text_chunks_storage=text_chunks_storage,
+                            language=language,
+                        )
+
+                        # Add timestamp prefix to entity description if available
+                        if timestamp and timestamp.strip() and not entity_description.startswith("[Time: "):
+                            entity_description = f"[Time: {timestamp}] {entity_description}"
+                    else:
+                        logger.warning(f"LLM model function not available, using UNKNOWN for entity '{need_insert_id}'")
+                except Exception as e:
+                    logger.error(f"Failed to generate description for orphaned entity '{need_insert_id}': {e}")
+                    # Keep UNKNOWN fallback values
+
             node_data = {
                 "entity_id": need_insert_id,
                 "source_id": source_id,
-                "description": description,
-                "entity_type": "UNKNOWN",
+                "description": entity_description,
+                "entity_type": entity_type,
                 "file_path": file_path,
                 "created_at": int(time.time()),
             }
@@ -1773,8 +1918,8 @@ async def _merge_edges_then_upsert(
             if added_entities is not None:
                 entity_data = {
                     "entity_name": need_insert_id,
-                    "entity_type": "UNKNOWN",
-                    "description": description,
+                    "entity_type": entity_type,
+                    "description": entity_description,
                     "source_id": source_id,
                     "file_path": file_path,
                     "created_at": int(time.time()),
@@ -2054,6 +2199,39 @@ async def merge_nodes_and_edges(
             async with pipeline_status_lock:
                 pipeline_status["latest_message"] = log_message
                 pipeline_status["history_messages"].append(log_message)
+
+            # === NEW: Insert added_entities into entity_vdb ===
+            if all_added_entities and entity_vdb is not None:
+                logger.info(f"Phase 3: Inserting {len(all_added_entities)} added entities to entity_vdb")
+
+                data_for_vdb = {}
+                for entity in all_added_entities:
+                    entity_name = entity.get("entity_name")
+                    description = entity.get("description", "")
+
+                    if not entity_name:
+                        continue
+
+                    # Use same ID format as Phase 1 (compute_mdhash_id with "ent-" prefix)
+                    entity_vdb_id = compute_mdhash_id(entity_name, prefix="ent-")
+                    content = f"{entity_name}\n{description}"
+
+                    data_for_vdb[entity_vdb_id] = {
+                        "content": content,
+                        "entity_name": entity_name,
+                        "entity_type": entity.get("entity_type", "unknown"),
+                        "description": description,
+                        "source_id": entity.get("source_id", ""),
+                        "file_path": entity.get("file_path", ""),
+                    }
+
+                # Batch insert
+                if data_for_vdb:
+                    try:
+                        await entity_vdb.upsert(data_for_vdb)
+                        logger.info(f"Successfully inserted {len(data_for_vdb)} added entities to entity_vdb")
+                    except Exception as e:
+                        logger.error(f"Failed to insert added entities to entity_vdb: {e}")
 
             # Update storage
             if final_entity_names:

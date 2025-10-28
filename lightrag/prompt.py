@@ -794,6 +794,68 @@ Please provide the refined list in strict JSON array format.
 """
 
 
+PROMPTS["orphaned_entity_description"] = """---Role---
+You are a Knowledge Graph Specialist responsible for generating entity descriptions for entities discovered through relationship extraction.
+
+---Task---
+An entity "{entity_name}" was referenced in a relationship but was not explicitly extracted as an entity. Your task is to analyze the context and generate an appropriate entity type and description for this entity.
+
+---Context---
+**Relationship Description**: {relationship_desc}
+
+**Source Document Chunk**:
+```
+{source_chunk}
+```
+
+**Available Entity Types**: {entity_types}
+
+---Instructions---
+1. **Entity Type Selection**: Choose the most appropriate entity type from the available types. If none fit well, classify it as "Other".
+2. **Description Quality**: Generate a comprehensive, meaningful description (50-150 words) that:
+   - Explains what this entity is based on the source context
+   - Uses third-person perspective
+   - Avoids pronouns like "this", "it", "they"
+   - Is written in {language}
+
+3. **Output Format**: Output EXACTLY in this format (no additional text):
+```
+(entity_type)<SEP>(description)
+```
+
+---Examples---
+
+**Example 1**:
+Entity Name: TSMC
+Relationship Description: TSMC supplies advanced semiconductor chips to Apple
+Source Chunk: Apple announced that despite supply chain challenges with key supplier TSMC, the company maintained strong performance. TSMC manufactures the cutting-edge processors used in iPhone devices.
+Available Types: [organization, person, geo, technology, product]
+
+Output:
+```
+organization<SEP>TSMC is a semiconductor manufacturing company that manufactures cutting-edge processors used in iPhone devices. TSMC specializes in advanced chip production and serves as a key technology supplier.
+```
+
+**Example 2**:
+Entity Name: Greater China
+Relationship Description: Apple revenue from Greater China reached $14.7B
+Source Chunk: The company reported regional performance with Greater China generating $14.7 billion in revenue. This represents Apple's combined sales in mainland China, Hong Kong, and Taiwan markets.
+Available Types: [organization, person, geo, financial_metric, temporal_range]
+
+Output:
+```
+geo<SEP>Greater China is a geographical market region that encompasses mainland China, Hong Kong, and Taiwan markets. Greater China represents a major regional sales territory in Asia.
+```
+
+---Real Data---
+Entity Name: {entity_name}
+Relationship Description: {relationship_desc}
+Source Chunk: {source_chunk}
+Available Entity Types: {entity_types}
+
+---Output---
+"""
+
 PROMPTS["recognition_filter"] = """---Role---
 You are an intelligent filter in a question-answering system. Your task is to identify and remove irrelevant entities and relationships based on the question type and complexity.
 
