@@ -7,7 +7,7 @@
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Adaptive FastRP embeddings with edge weights.
+* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Context-aware FastRP embeddings with edge weights.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **🏗️ Architecture Overview:**
@@ -45,7 +45,7 @@ where:
 - $p_{S,W}(v)$ = personalization vector with weighted seeds
 - $e_{reweight}(u,v)$ = temporarily adjusted edge weights based on query-relation similarity
 
-**🧬 Adaptive FastRP with Edge Weights:**
+**🧬 Context-aware FastRP with Edge Weights:**
 
 $$X = \sum_{k=0}^{K} w_k \cdot D^r \cdot S^k \cdot R$$
 
@@ -203,7 +203,7 @@ async def main():
             max_hop=2,              # Multi-hop traversal depth
             top_neighbors=30,       # Max neighbor per node
             top_ppr_nodes=5,        # Top PageRank entities
-            top_fastrp_nodes=5      # Top Adaptive FastRP structural entities
+            top_fastrp_nodes=5      # Top Context-aware FastRP structural entities
         )
     )
 
@@ -228,7 +228,7 @@ response = rag.query(query, param=QueryParam(
     max_hop=2,           # Multi-hop traversal
     top_neighbors=30,    # Top neighbor per node
     top_ppr_nodes=5,     # Personalized PageRank entities
-    top_fastrp_nodes=5   # Adaptive FastRP structural entities
+    top_fastrp_nodes=5   # Context-aware FastRP structural entities
 ))
 ```
 
@@ -239,7 +239,7 @@ response = rag.query(query, param=QueryParam(
 KairosRAG extends **LightRAG** with:
 
 1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
-2. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Adaptive FastRP structural similarity providing complementary retrieval perspectives.
+2. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Context-aware FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 5. **Context Recognition Filtering** – LLM-based relevance filtering with >95% confidence threshold to remove query-irrelevant entities/relations.
