@@ -478,6 +478,10 @@ class LightRAG:
         if self.ollama_server_infos is None:
             self.ollama_server_infos = OllamaServerInfos()
 
+        # Initialize tool LLM clients (lazy initialization via properties)
+        self._openai_client = None  # For recognition, discovery
+        self._langchain_chat_client = None  # For agentic merging
+
         # Validate config
         if self.force_llm_summary_on_merge < 3:
             logger.warning(
@@ -494,6 +498,9 @@ class LightRAG:
 
         # Fix global_config now
         global_config = asdict(self)
+        # Add client references to global_config (properties can't be serialized by asdict)
+        global_config["openai_client"] = self.openai_client
+        global_config["langchain_chat_client"] = self.langchain_chat_client
 
         _print_config = ",\n  ".join([f"{k} = {v}" for k, v in global_config.items()])
         logger.debug(f"LightRAG init with param:\n  {_print_config}\n")
@@ -632,6 +639,33 @@ class LightRAG:
             self._storages_status = StoragesStatus.INITIALIZED
             logger.debug("All storage types initialized")
 
+    @property
+    def openai_client(self):
+        """Lazy initialization of shared OpenAI client for tool operations (recognition, discovery)"""
+        if self._openai_client is None:
+            from openai import OpenAI
+            import os
+            self._openai_client = OpenAI(
+                api_key=os.environ.get("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+            )
+            logger.debug("Initialized shared OpenAI client for tool operations")
+        return self._openai_client
+
+    @property
+    def langchain_chat_client(self):
+        """Lazy initialization of shared LangChain ChatOpenAI client for agentic merging"""
+        if self._langchain_chat_client is None:
+            from langchain_openai import ChatOpenAI
+            import os
+            self._langchain_chat_client = ChatOpenAI(
+                model=self.tool_llm_model_name,
+                api_key=os.getenv("OPENAI_API_KEY"),
+                base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+            )
+            logger.debug(f"Initialized shared LangChain ChatOpenAI client with model: {self.tool_llm_model_name}")
+        return self._langchain_chat_client
+
     async def finalize_storages(self):
         """Asynchronously finalize the storages with improved error handling"""
         if self._storages_status == StoragesStatus.INITIALIZED:
@@ -675,6 +709,21 @@ class LightRAG:
                 )
             else:
                 logger.debug("All storages finalized successfully")
+
+            # Clean up tool LLM clients
+            if self._openai_client is not None:
+                try:
+                    self._openai_client.close()
+                    logger.debug("Closed shared OpenAI client")
+                except Exception as e:
+                    logger.error(f"Failed to close OpenAI client: {e}")
+                finally:
+                    self._openai_client = None
+
+            if self._langchain_chat_client is not None:
+                # LangChain clients don't need explicit close
+                self._langchain_chat_client = None
+                logger.debug("Cleared shared LangChain ChatOpenAI client")
 
             self._storages_status = StoragesStatus.FINALIZED
 
@@ -3063,7 +3112,7 @@ class LightRAG:
             print(f"{'='*70}")
 
             # Execute single pass merge
-            result = await single_pass_agentic_merging(self, threshold)
+            result = await single_pass_agentic_merging(self, threshold, self.langchain_chat_client)
 
             # Record results
             all_iterations.append(result)

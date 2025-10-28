@@ -4648,6 +4648,8 @@ async def _build_query_context(
 
             # Use OpenAI to filter
             tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
+            # Get openai_client from global_config (set by LightRAG instance)
+            openai_client = global_config.get("openai_client", None)
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -4655,6 +4657,7 @@ async def _build_query_context(
                 batch_size=query_param.recognition_batch_size,
                 tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
+                openai_client=openai_client,  # 傳入共用的 OpenAI client
             )
 
             # Rebuild context with filtered data
@@ -5279,6 +5282,8 @@ Knowledge Graph Data (Relationship):
 
             # Use OpenAI to filter
             tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
+            # Get openai_client from global_config (set by LightRAG instance)
+            openai_client = global_config.get("openai_client", None)
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -5286,6 +5291,7 @@ Knowledge Graph Data (Relationship):
                 batch_size=query_param.recognition_batch_size,
                 tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
+                openai_client=openai_client,  # 傳入共用的 OpenAI client
             )
 
             # Rebuild context with filtered data

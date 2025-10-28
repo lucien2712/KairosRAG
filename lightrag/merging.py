@@ -12,13 +12,14 @@ from .utils import logger
 from .prompt import PROMPTS
 
 
-async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8) -> dict:
+async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, langchain_client=None) -> dict:
     """
     Asynchronously perform intelligent entity merging using vector similarity and LLM decision making.
 
     Args:
         rag_instance: LightRAG instance containing all necessary components
         threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
+        langchain_client: Optional shared LangChain ChatOpenAI client (if None, creates new one)
 
     Returns:
         dict: Statistics about the merging process
@@ -42,13 +43,17 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8) -> d
             print(f"Failed to load entity pair cache: {e}")
             entity_pair_cache = {}
 
-    # Initialize LLM using rag_instance.tool_llm_model_name
-    llm = ChatOpenAI(
-        model=rag_instance.tool_llm_model_name,
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
-    )
-    print(f"LLM initialized: {rag_instance.tool_llm_model_name}")
+    # Initialize LLM using rag_instance.tool_llm_model_name or use shared client
+    if langchain_client is None:
+        llm = ChatOpenAI(
+            model=rag_instance.tool_llm_model_name,
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+        )
+        print(f"LLM initialized: {rag_instance.tool_llm_model_name}")
+    else:
+        llm = langchain_client
+        print(f"Using shared LangChain client: {rag_instance.tool_llm_model_name}")
 
     # Build global_config for summarization
     global_config = {

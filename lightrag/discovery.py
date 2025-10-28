@@ -277,7 +277,8 @@ async def process_file_with_llm(
     tool_llm_model_name: str,
     tokenizer,
     _extract_json_callback,
-    _process_large_file_callback
+    _process_large_file_callback,
+    openai_client=None  # 新增參數：共用的 OpenAI client
 ) -> list:
     """Process a file with LLM to suggest new entity types.
 
@@ -299,7 +300,11 @@ async def process_file_with_llm(
 
     # For documents under 30000 tokens, process directly with retry mechanism
     max_retries = 3
-    client = create_openai_client(tool_llm_model_name)
+    # 使用傳入的 client，或 fallback 到建立新的
+    if openai_client is None:
+        client = create_openai_client(tool_llm_model_name)
+    else:
+        client = openai_client
     current_entity_types_json = json.dumps(
         [et["entity_type"] for et in current_entity_types]
     )
@@ -353,7 +358,8 @@ async def process_large_file_with_chunking(
     current_entity_types: list,
     tool_llm_model_name: str,
     tokenizer,
-    _extract_json_callback
+    _extract_json_callback,
+    openai_client=None  # 新增參數：共用的 OpenAI client
 ) -> list:
     """Process a large file by splitting into chunks.
 
@@ -386,7 +392,11 @@ async def process_large_file_with_chunking(
 
     # Process each chunk with LLM
     all_suggested_types = []
-    client = create_openai_client(tool_llm_model_name)
+    # 使用傳入的 client，或 fallback 到建立新的
+    if openai_client is None:
+        client = create_openai_client(tool_llm_model_name)
+    else:
+        client = openai_client
     current_entity_types_json = json.dumps(
         [et["entity_type"] for et in current_entity_types]
     )
@@ -440,10 +450,14 @@ async def process_large_file_with_chunking(
     return deduplicated_types
 
 
-async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback) -> list:
+async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback, openai_client=None) -> list:
     """Use LLM to remove duplicates and refine entity types with retry mechanism."""
     max_retries = 3
-    client = create_openai_client(tool_llm_model_name)
+    # 使用傳入的 client，或 fallback 到建立新的
+    if openai_client is None:
+        client = create_openai_client(tool_llm_model_name)
+    else:
+        client = openai_client
     entity_types_json = json.dumps(entity_types, ensure_ascii=False, indent=2)
 
     for attempt in range(max_retries):
@@ -628,7 +642,8 @@ async def entity_type_discovery(
                 current_types,
                 rag_instance.tool_llm_model_name,
                 rag_instance.tokenizer,
-                _extract_json_callback
+                _extract_json_callback,
+                rag_instance.openai_client  # 傳入共用的 OpenAI client
             )
 
         async def process_file_with_limit(file_name: str, text_content: str, entity_types: list):
@@ -640,7 +655,8 @@ async def entity_type_discovery(
                     rag_instance.tool_llm_model_name,
                     rag_instance.tokenizer,
                     _extract_json_callback,
-                    _process_large_file_callback
+                    _process_large_file_callback,
+                    rag_instance.openai_client  # 傳入共用的 OpenAI client
                 )
 
         # Process files in batches of REFINE_INTERVAL
@@ -682,7 +698,8 @@ async def entity_type_discovery(
                 refined_entity_types = await refine_entity_types(
                     combined_entity_types,
                     rag_instance.tool_llm_model_name,
-                    _extract_json_callback
+                    _extract_json_callback,
+                    rag_instance.openai_client  # 傳入共用的 OpenAI client
                 )
 
                 # Update current_entity_types for next batch

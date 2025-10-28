@@ -6,12 +6,6 @@ from openai import OpenAI
 from .utils import logger
 from .prompt import PROMPTS
 
-# Initialize OpenAI client
-client = OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY"),
-    base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
-)
-
 
 def extract_json_from_response(response_content: str):
     """從 LLM 回應中提取 JSON 對象（支持 {} 和 []）
@@ -82,6 +76,7 @@ async def recognition_memory_filter(
     batch_size: int = 10,
     tool_llm_model_name: str = "gpt-4o-mini",  # 工具專用 LLM（僅支援 OpenAI-compatible API）
     global_config: dict = None,  # 新增參數：用於獲取 llm_model_max_async
+    openai_client = None,  # 新增參數：共用的 OpenAI client（如果為 None 則建立新的）
 ) -> tuple[list[dict], list[dict]]:
     """
     使用 LLM 過濾 entities/relations（一起處理以保持上下文），完整保留原始數據
@@ -103,7 +98,7 @@ async def recognition_memory_filter(
 
     # 一起處理 entities 和 relations（而非並行分開處理）
     filtered_entities, filtered_relations = await _batch_recognize_combined(
-        query, entities, relations, batch_size, tool_llm_model_name, global_config
+        query, entities, relations, batch_size, tool_llm_model_name, global_config, openai_client
     )
 
     # 統計日誌
@@ -307,6 +302,7 @@ async def _batch_recognize_combined(
     batch_size: int,
     tool_llm_model_name: str = "gpt-4o-mini",
     global_config: dict = None,
+    openai_client = None,  # 新增參數：共用的 OpenAI client
 ) -> tuple[list[dict], list[dict]]:
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
@@ -318,10 +314,14 @@ async def _batch_recognize_combined(
     2. 並行處理所有 orphan entity batches
     3. 合併所有結果
     """
-    client = OpenAI(
-        api_key=os.environ.get("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
-    )
+    # 使用傳入的 client，或 fallback 到建立新的（向後兼容）
+    if openai_client is None:
+        client = OpenAI(
+            api_key=os.environ.get("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+        )
+    else:
+        client = openai_client
 
     # 為 relations 創建 ID 映射
     id_mapping = {}
