@@ -873,6 +873,11 @@ async def amerge_entities(
                         "data": edge_data.copy(),
                     }
 
+            # Delete old relationships records from vector database BEFORE creating new ones
+            if relations_to_delete:
+                await relationships_vdb.delete(relations_to_delete)
+                logger.debug(f"Deleted {len(relations_to_delete)} old relationship VDB records")
+
             # Apply relationship updates
             for rel_data in relation_updates.values():
                 await chunk_entity_relation_graph.upsert_edge(
@@ -881,9 +886,6 @@ async def amerge_entities(
                 logger.debug(
                     f"Created or updated relationship: {rel_data['src']} -> {rel_data['tgt']}"
                 )
-
-                # Delete relationships records from vector database
-                await relationships_vdb.delete(relations_to_delete)
                 
 
             # 7. Update entity vector representation
