@@ -257,12 +257,14 @@ class NodeEmbeddingEnhancer:
         if self._relations_cache is None:
             logger.debug("Relations cache miss, fetching from knowledge graph")
             self._relations_cache = await knowledge_graph_inst.get_all_edges()
-            # Optionally persist to disk
+            # Optionally persist to disk with gzip compression
             try:
+                import gzip
                 os.makedirs(self.working_dir, exist_ok=True)
-                with open(self.relations_cache_path, 'wb') as f:
-                    pickle.dump(self._relations_cache, f)
-                logger.debug(f"Saved {len(self._relations_cache)} relations to cache")
+                cache_path_gz = self.relations_cache_path + '.gz'
+                with gzip.open(cache_path_gz, 'wb', compresslevel=1) as f:
+                    pickle.dump(self._relations_cache, f, protocol=4)
+                logger.debug(f"Saved {len(self._relations_cache)} relations to compressed cache")
             except Exception as e:
                 logger.debug(f"Failed to save relations cache: {e}")
         return self._relations_cache
@@ -272,12 +274,14 @@ class NodeEmbeddingEnhancer:
         self._relations_cache = None
         self._relation_embeddings_cache = None
         self._entity_embeddings_cache = None
-        if os.path.exists(self.relations_cache_path):
-            try:
-                os.remove(self.relations_cache_path)
-                logger.debug("Relations cache invalidated")
-            except Exception as e:
-                logger.debug(f"Failed to remove relations cache file: {e}")
+        # Remove both .pkl and .gz versions for backward compatibility
+        for cache_path in [self.relations_cache_path, self.relations_cache_path + '.gz']:
+            if os.path.exists(cache_path):
+                try:
+                    os.remove(cache_path)
+                    logger.debug(f"Relations cache invalidated: {cache_path}")
+                except Exception as e:
+                    logger.debug(f"Failed to remove relations cache file: {e}")
         if os.path.exists(self.relation_embeddings_cache_path):
             try:
                 os.remove(self.relation_embeddings_cache_path)
@@ -1021,17 +1025,21 @@ class NodeEmbeddingEnhancer:
             # Ensure working directory exists
             os.makedirs(self.working_dir, exist_ok=True)
             
-            # Save graph structure
+            # Save graph structure with gzip compression
             if self.graph:
-                with open(self.graph_path, 'wb') as f:
-                    pickle.dump(self.graph, f)
-                logger.info(f"Saved graph with {len(self.graph.nodes())} nodes")
+                import gzip
+                graph_path_gz = self.graph_path + '.gz'
+                with gzip.open(graph_path_gz, 'wb', compresslevel=1) as f:
+                    pickle.dump(self.graph, f, protocol=4)
+                logger.info(f"Saved compressed graph with {len(self.graph.nodes())} nodes")
             
-            # Save FastRP embeddings
+            # Save FastRP embeddings with gzip compression
             if self.fastrp_embeddings:
-                with open(self.fastrp_path, 'wb') as f:
-                    pickle.dump(self.fastrp_embeddings, f)
-                logger.info(f"Saved FastRP embeddings for {len(self.fastrp_embeddings)} entities")
+                import gzip
+                fastrp_path_gz = self.fastrp_path + '.gz'
+                with gzip.open(fastrp_path_gz, 'wb', compresslevel=1) as f:
+                    pickle.dump(self.fastrp_embeddings, f, protocol=4)
+                logger.info(f"Saved compressed FastRP embeddings for {len(self.fastrp_embeddings)} entities")
 
         except Exception as e:
             logger.error(f"Error saving node embedding data: {e}")
@@ -1039,20 +1047,38 @@ class NodeEmbeddingEnhancer:
     def _load_persisted_data(self):
         """Load previously saved graph structure and embeddings."""
         try:
-            # Load graph structure
-            if os.path.exists(self.graph_path):
+            # Load graph structure (support both .pkl and .pkl.gz for backward compatibility)
+            graph_path_gz = self.graph_path + '.gz'
+            if os.path.exists(graph_path_gz):
+                import gzip
+                with gzip.open(graph_path_gz, 'rb') as f:
+                    self.graph = pickle.load(f)
+                logger.info(f"Loaded compressed graph with {len(self.graph.nodes())} nodes")
+            elif os.path.exists(self.graph_path):
                 with open(self.graph_path, 'rb') as f:
                     self.graph = pickle.load(f)
                 logger.info(f"Loaded graph with {len(self.graph.nodes())} nodes from {self.graph_path}")
 
-            # Load FastRP embeddings
-            if os.path.exists(self.fastrp_path):
+            # Load FastRP embeddings (support both .pkl and .pkl.gz for backward compatibility)
+            fastrp_path_gz = self.fastrp_path + '.gz'
+            if os.path.exists(fastrp_path_gz):
+                import gzip
+                with gzip.open(fastrp_path_gz, 'rb') as f:
+                    self.fastrp_embeddings = pickle.load(f)
+                logger.info(f"Loaded compressed FastRP embeddings for {len(self.fastrp_embeddings)} entities")
+            elif os.path.exists(self.fastrp_path):
                 with open(self.fastrp_path, 'rb') as f:
                     self.fastrp_embeddings = pickle.load(f)
                 logger.info(f"Loaded FastRP embeddings for {len(self.fastrp_embeddings)} entities")
 
-            # Load Relations cache
-            if os.path.exists(self.relations_cache_path):
+            # Load Relations cache (support both .pkl and .pkl.gz for backward compatibility)
+            cache_path_gz = self.relations_cache_path + '.gz'
+            if os.path.exists(cache_path_gz):
+                import gzip
+                with gzip.open(cache_path_gz, 'rb') as f:
+                    self._relations_cache = pickle.load(f)
+                logger.info(f"Loaded compressed relations cache with {len(self._relations_cache)} relations")
+            elif os.path.exists(self.relations_cache_path):
                 with open(self.relations_cache_path, 'rb') as f:
                     self._relations_cache = pickle.load(f)
                 logger.info(f"Loaded relations cache with {len(self._relations_cache)} relations")

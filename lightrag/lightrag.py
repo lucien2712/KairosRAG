@@ -3266,11 +3266,14 @@ class LightRAG:
                 })
                 
             logger.info(f"Computing FastRP embeddings for {len(entities)} entities and {len(relations)} relations")
-            
+
             # Clear existing embeddings and compute fresh
             self.node_embedding.fastrp_embeddings = None
             self.node_embedding.pagerank_scores = None
             self.node_embedding.graph = None
+
+            # Invalidate relations cache to ensure fresh data after insertions
+            self.node_embedding.invalidate_relations_cache()
             
             # Compute embeddings (note: text_embeddings parameter is not used in current implementation)
             await self.node_embedding.compute_node_embeddings(
