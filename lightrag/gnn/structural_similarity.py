@@ -148,6 +148,8 @@ def compute_adaptive_fastrp_batch(
             similarity_matrix = candidate_matrix @ seed_matrix.T
             mean_scores = similarity_matrix.mean(axis=1)
 
+            logger.info(f"FastRP: Computed similarities for {len(candidate_names)} candidates")
+
             for entity_name, score in zip(candidate_names, mean_scores):
                 scores[entity_name] = float(score)
 

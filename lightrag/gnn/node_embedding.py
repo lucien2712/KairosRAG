@@ -44,7 +44,20 @@ async def compute_embeddings_in_batches(
         if not batch:
             continue
         batch_embeddings = await embedding_func.func(batch)
-        if isinstance(batch_embeddings, list):
+
+        # Handle different return types
+        if isinstance(batch_embeddings, np.ndarray):
+            # If numpy array, convert to list of individual embeddings
+            if batch_embeddings.ndim == 2:
+                # Shape: (batch_size, embedding_dim) -> list of (embedding_dim,)
+                embeddings.extend([emb for emb in batch_embeddings])
+            elif batch_embeddings.ndim == 1:
+                # Single embedding
+                embeddings.append(batch_embeddings)
+            else:
+                # Unexpected shape
+                embeddings.extend(batch_embeddings)
+        elif isinstance(batch_embeddings, list):
             embeddings.extend(batch_embeddings)
         else:
             embeddings.append(batch_embeddings)
@@ -77,11 +90,15 @@ class NodeEmbeddingEnhancer:
         self.fastrp_embeddings: Optional[Dict[str, np.ndarray]] = None
         self.graph: Optional[nx.Graph] = None
         self._relations_cache: Optional[List[Dict]] = None  # Cache for all relations
+        self._relation_embeddings_cache: Optional[Dict[str, np.ndarray]] = None  # Cache for relation embeddings
+        self._entity_embeddings_cache: Optional[Dict[str, np.ndarray]] = None  # Cache for entity embeddings (entity_name + description)
 
         # File paths for persistence
         self.graph_path = os.path.join(working_dir, "node_embedding_graph.pkl")
         self.fastrp_path = os.path.join(working_dir, "fastrp_embeddings.pkl")
         self.relations_cache_path = os.path.join(working_dir, "relations_cache.pkl")
+        self.relation_embeddings_cache_path = os.path.join(working_dir, "relation_embeddings_cache.pkl")
+        self.entity_embeddings_cache_path = os.path.join(working_dir, "entity_embeddings_cache.pkl")
 
         # Try to load existing data
         self._load_persisted_data()
@@ -239,7 +256,7 @@ class NodeEmbeddingEnhancer:
         """Get all relations with caching to avoid repeated full-graph queries."""
         if self._relations_cache is None:
             logger.debug("Relations cache miss, fetching from knowledge graph")
-            self._relations_cache = await knowledge_graph_inst.get_all_relationships()
+            self._relations_cache = await knowledge_graph_inst.get_all_edges()
             # Optionally persist to disk
             try:
                 os.makedirs(self.working_dir, exist_ok=True)
@@ -253,12 +270,346 @@ class NodeEmbeddingEnhancer:
     def invalidate_relations_cache(self):
         """Invalidate relations cache (call when graph structure changes)."""
         self._relations_cache = None
+        self._relation_embeddings_cache = None
+        self._entity_embeddings_cache = None
         if os.path.exists(self.relations_cache_path):
             try:
                 os.remove(self.relations_cache_path)
                 logger.debug("Relations cache invalidated")
             except Exception as e:
                 logger.debug(f"Failed to remove relations cache file: {e}")
+        if os.path.exists(self.relation_embeddings_cache_path):
+            try:
+                os.remove(self.relation_embeddings_cache_path)
+                logger.debug("Relation embeddings cache invalidated")
+            except Exception as e:
+                logger.debug(f"Failed to remove relation embeddings cache file: {e}")
+        if os.path.exists(self.entity_embeddings_cache_path):
+            try:
+                os.remove(self.entity_embeddings_cache_path)
+                logger.debug("Entity embeddings cache invalidated")
+            except Exception as e:
+                logger.debug(f"Failed to remove entity embeddings cache file: {e}")
+
+    async def _get_relation_embeddings_from_vdb(
+        self,
+        knowledge_graph_inst,
+        global_config: Dict[str, Any]
+    ) -> Dict[str, np.ndarray]:
+        """
+        Get relation embeddings directly from Vector Storage (same format as insert).
+        This reuses embeddings computed during insert, avoiding redundant API calls.
+
+        Args:
+            knowledge_graph_inst: Knowledge graph storage instance
+            global_config: Global configuration with relationships_vdb
+
+        Returns:
+            Dict mapping relation_keywords -> embedding vector
+        """
+        try:
+            relationships_vdb = global_config.get("relationships_vdb")
+            if not relationships_vdb or not hasattr(relationships_vdb, '_get_client'):
+                logger.debug("Relationship vector storage doesn't support direct vector access")
+                return {}
+
+            # Get all relations
+            all_relations = await self.get_all_relations_cached(knowledge_graph_inst)
+            if not all_relations:
+                logger.debug("No relations found from knowledge graph")
+                return {}
+
+            logger.debug(f"Retrieved {len(all_relations)} relations from cache")
+
+            # Generate vector database IDs for all relationships
+            from ..utils import compute_mdhash_id
+            rel_vdb_ids = []
+
+            for relation in all_relations:
+                # Try different field names (NetworkX uses 'source'/'target', others may use 'source_id'/'target_id')
+                src_id = relation.get('source') or relation.get('source_id', '')
+                tgt_id = relation.get('target') or relation.get('target_id', '')
+                keywords = relation.get('keywords', '')
+
+                if src_id and tgt_id and keywords.strip():
+                    # IMPORTANT: Must match insert format - no separator between src and tgt
+                    # For undirected graphs, try BOTH directions (src+tgt and tgt+src)
+                    rel_key_1 = src_id + tgt_id
+                    rel_key_2 = tgt_id + src_id
+                    vdb_id_1 = compute_mdhash_id(rel_key_1, prefix="rel-")
+                    vdb_id_2 = compute_mdhash_id(rel_key_2, prefix="rel-")
+                    # Add both possible IDs (VDB lookup will filter to existing ones)
+                    rel_vdb_ids.append(vdb_id_1)
+                    if vdb_id_2 != vdb_id_1:  # Avoid duplicates
+                        rel_vdb_ids.append(vdb_id_2)
+
+            if not rel_vdb_ids:
+                logger.debug("No valid relation IDs to lookup in VDB")
+                return {}
+
+            # Direct access to NanoVectorDB storage to bypass client.get() limitation
+            # NanoVectorDB's client.get() has a bug that only returns ~139 results
+            # So we access the underlying storage directly
+            client = await relationships_vdb._get_client()
+            storage = getattr(client, '_NanoVectorDB__storage', None)
+
+            if storage is None:
+                # Fallback to client.get() if storage access fails
+                logger.warning("Cannot access NanoVectorDB storage directly, using client.get()")
+                vdb_results = client.get(rel_vdb_ids)
+            else:
+                # Build ID lookup map from storage
+                storage_map = {item['__id__']: item for item in storage.get('data', [])}
+                # Get results for requested IDs
+                vdb_results = [storage_map.get(vdb_id) for vdb_id in rel_vdb_ids]
+
+            relation_vectors = {}
+            missing_count = 0
+            none_count = 0
+            no_vector_count = 0
+            no_id_count = 0
+            decode_error_count = 0
+
+            for vdb_data in vdb_results:
+                if vdb_data is None:
+                    none_count += 1
+                    missing_count += 1
+                    continue
+
+                if 'vector' not in vdb_data:
+                    no_vector_count += 1
+                    missing_count += 1
+                    continue
+
+                # Get relation info directly from VDB data
+                src_id = vdb_data.get('src_id')
+                tgt_id = vdb_data.get('tgt_id')
+                keywords = vdb_data.get('keywords', '')
+
+                if not src_id or not tgt_id or not keywords:
+                    no_id_count += 1
+                    missing_count += 1
+                    continue
+
+                # For undirected graphs, normalize to (src, tgt) tuple using lexicographic order
+                # This ensures consistent key regardless of edge direction in graph
+                if src_id > tgt_id:
+                    edge_key = (tgt_id, src_id)
+                else:
+                    edge_key = (src_id, tgt_id)
+                try:
+                    # Decode NanoVectorDB format: base64 + zlib + float16
+                    import base64
+                    import zlib
+
+                    compressed_vector = base64.b64decode(vdb_data['vector'])
+                    vector_bytes = zlib.decompress(compressed_vector)
+                    vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+
+                    # Use normalized edge_key to handle undirected graphs
+                    # This prevents different edges with same keywords from being overwritten
+                    relation_vectors[edge_key] = {
+                        'vector': vector_array,
+                        'keywords': keywords
+                    }
+                except Exception as e:
+                    logger.debug(f"Error decoding vector for relation '{keywords}': {e}")
+                    decode_error_count += 1
+                    missing_count += 1
+
+            logger.info(f"Retrieved {len(relation_vectors)} relation embeddings from Vector Storage")
+            return relation_vectors
+
+        except Exception as e:
+            logger.debug(f"Error getting relation embeddings from VDB: {e}")
+            return {}
+
+    async def get_relation_embeddings_cached(
+        self,
+        knowledge_graph_inst,
+        embedding_func
+    ) -> Dict[str, np.ndarray]:
+        """
+        Get relation embeddings with caching.
+
+        Returns:
+            Dict mapping relation_keywords -> embedding vector
+        """
+        if self._relation_embeddings_cache is not None:
+            logger.debug(f"Relation embeddings cache hit: {len(self._relation_embeddings_cache)} relations")
+            return self._relation_embeddings_cache
+
+        logger.debug("Relation embeddings cache miss, computing embeddings...")
+
+        # Get all relations
+        all_relations = await self.get_all_relations_cached(knowledge_graph_inst)
+
+        # Prepare relation strings
+        rel_strs: List[str] = []
+        rel_keywords_order: List[str] = []
+
+        for relation in all_relations:
+            rel_keywords = relation.get("keywords", "")
+            if rel_keywords.strip():
+                rel_str = (
+                    f"{rel_keywords}\t{relation.get('source_id', '')}\n"
+                    f"{relation.get('target_id', '')}\n{relation.get('description', '')}"
+                )
+                rel_strs.append(rel_str)
+                rel_keywords_order.append(rel_keywords)
+
+        if not rel_strs:
+            logger.warning("No relations with keywords found")
+            return {}
+
+        # Compute embeddings in batches
+        batch_size = 16  # Fixed batch size for relation embeddings
+        rel_embeddings = await compute_embeddings_in_batches(
+            rel_strs, embedding_func, batch_size
+        )
+
+        # Build cache dictionary
+        self._relation_embeddings_cache = {}
+        for idx, rel_embedding in enumerate(rel_embeddings):
+            rel_keywords = rel_keywords_order[idx]
+            self._relation_embeddings_cache[rel_keywords] = np.array(rel_embedding)
+
+        # Persist to disk
+        try:
+            os.makedirs(self.working_dir, exist_ok=True)
+            with open(self.relation_embeddings_cache_path, 'wb') as f:
+                pickle.dump(self._relation_embeddings_cache, f)
+            logger.info(f"Cached {len(self._relation_embeddings_cache)} relation embeddings to disk")
+        except Exception as e:
+            logger.warning(f"Failed to save relation embeddings cache: {e}")
+
+        return self._relation_embeddings_cache
+
+    async def _get_entity_embeddings_from_vdb(
+        self,
+        seed_nodes: List[Dict],
+        global_config: Dict[str, Any]
+    ) -> Dict[str, np.ndarray]:
+        """
+        Get entity embeddings directly from Vector Storage (same format as insert).
+        This reuses embeddings computed during insert, avoiding redundant API calls.
+
+        Args:
+            seed_nodes: List of seed node dictionaries
+            global_config: Global configuration with entities_vdb
+
+        Returns:
+            Dict mapping entity_name -> embedding vector
+        """
+        try:
+            entities_vdb = global_config.get("entities_vdb")
+            if not entities_vdb or not hasattr(entities_vdb, '_get_client'):
+                logger.debug("Vector storage doesn't support direct vector access")
+                return {}
+
+            # Collect entity names
+            entity_names = [node.get("entity_name") for node in seed_nodes if node.get("entity_name")]
+            if not entity_names:
+                return {}
+
+            # Generate vector database IDs
+            from ..utils import compute_mdhash_id
+            entity_vdb_ids = [compute_mdhash_id(name, prefix="ent-") for name in entity_names]
+
+            # Direct access for NanoVectorDB
+            client = await entities_vdb._get_client()
+            vdb_results = client.get(entity_vdb_ids)
+
+            entity_vectors = {}
+            for i, vdb_data in enumerate(vdb_results):
+                if vdb_data and 'vector' in vdb_data:
+                    entity_name = entity_names[i]
+                    try:
+                        # Decode NanoVectorDB format: base64 + zlib + float16
+                        import base64
+                        import zlib
+
+                        compressed_vector = base64.b64decode(vdb_data['vector'])
+                        vector_bytes = zlib.decompress(compressed_vector)
+                        vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+                        entity_vectors[entity_name] = vector_array
+                    except Exception as e:
+                        logger.debug(f"Error decoding vector for {entity_name}: {e}")
+
+            logger.debug(f"Retrieved {len(entity_vectors)} entity embeddings from Vector Storage")
+            return entity_vectors
+
+        except Exception as e:
+            logger.debug(f"Error getting entity embeddings from VDB: {e}")
+            return {}
+
+    async def get_entity_embeddings_cached(
+        self,
+        seed_nodes: List[Dict],
+        embedding_func
+    ) -> Dict[str, np.ndarray]:
+        """
+        Get entity embeddings with caching.
+
+        Args:
+            seed_nodes: List of seed node dictionaries with entity_name and description
+            embedding_func: Embedding function to use
+
+        Returns:
+            Dict mapping entity_name -> embedding vector
+        """
+        if self._entity_embeddings_cache is None:
+            self._entity_embeddings_cache = {}
+
+        # Collect entities that need embedding computation
+        entities_to_compute = []
+        entity_names_to_compute = []
+
+        for node in seed_nodes:
+            entity_name = node.get("entity_name")
+            if not entity_name:
+                continue
+
+            # Check if already cached
+            if entity_name in self._entity_embeddings_cache:
+                continue
+
+            # Get description
+            description = node.get("description") or ""
+            if description:
+                entity_str = f"{entity_name} {description}"
+                entities_to_compute.append(entity_str)
+                entity_names_to_compute.append(entity_name)
+
+        # Compute embeddings for new entities
+        if entities_to_compute:
+            logger.debug(f"Computing embeddings for {len(entities_to_compute)} new entities")
+            batch_size = 16  # Fixed batch size
+            new_embeddings = await compute_embeddings_in_batches(
+                entities_to_compute, embedding_func, batch_size
+            )
+
+            # Add to cache
+            for idx, entity_name in enumerate(entity_names_to_compute):
+                self._entity_embeddings_cache[entity_name] = np.array(new_embeddings[idx])
+
+            # Persist to disk
+            try:
+                os.makedirs(self.working_dir, exist_ok=True)
+                with open(self.entity_embeddings_cache_path, 'wb') as f:
+                    pickle.dump(self._entity_embeddings_cache, f)
+                logger.debug(f"Cached {len(self._entity_embeddings_cache)} entity embeddings to disk")
+            except Exception as e:
+                logger.warning(f"Failed to save entity embeddings cache: {e}")
+
+        # Return only the embeddings for requested entities
+        result = {}
+        for node in seed_nodes:
+            entity_name = node.get("entity_name")
+            if entity_name and entity_name in self._entity_embeddings_cache:
+                result[entity_name] = self._entity_embeddings_cache[entity_name]
+
+        return result
 
     def compute_personalized_pagerank(
         self,
@@ -313,14 +664,30 @@ class NodeEmbeddingEnhancer:
 
             # Phase 2: Apply direct edge reweighting if relation similarities provided
             if relation_similarities and alpha > 0.0:
-                # Temporarily set edge weights based on hl_keywords similarity
+                # Temporarily set edge weights based on query-relation similarity
+                reweighted_edges = 0
+                skipped_edges = 0
+                temp_weights = []
                 for u, v, edge_data in self.graph.edges(data=True):
-                    edge_keywords = edge_data.get('keywords', '')
+                    # Normalize edge key for undirected graphs (lexicographic order)
+                    if u > v:
+                        normalized_key = (v, u)
+                    else:
+                        normalized_key = (u, v)
 
-                    # Use similarity as weight directly
-                    similarity = relation_similarities[edge_keywords]
-                    self.graph[u][v]['temp_weight'] = similarity  # Min weight 0.05
+                    # Use similarity as weight if available, otherwise use original weight
+                    if normalized_key in relation_similarities:
+                        similarity = relation_similarities[normalized_key]
+                        self.graph[u][v]['temp_weight'] = similarity
+                        temp_weights.append(similarity)
+                        reweighted_edges += 1
+                    else:
+                        # Use original weight for edges without embeddings
+                        original_weight = edge_data.get('weight', 1.0)
+                        self.graph[u][v]['temp_weight'] = original_weight
+                        skipped_edges += 1
 
+                logger.info(f"Phase 2: Applied query-aware edge reweighting to {reweighted_edges}/{self.graph.number_of_edges()} edges")
 
                 # Compute PageRank with temporary weights
                 ppr_scores = nx.pagerank(
@@ -444,36 +811,37 @@ class NodeEmbeddingEnhancer:
                             query_vec = np.array(query_embedding[0])
                             logger.debug("Computed ll_keywords embedding for PPR Phase 1")
 
-                        entity_strs: List[str] = []
-                        entity_order: List[str] = []
+                        # Try to get entity embeddings from Vector Storage first (same format as insert)
+                        # This avoids recomputing embeddings that were already computed during insert
+                        entity_embeddings_dict = await self._get_entity_embeddings_from_vdb(
+                            seed_nodes, global_config
+                        )
 
-                        for seed_entity in seed_entity_names:
-                            seed_info = next(
-                                (node for node in seed_nodes if node.get("entity_name") == seed_entity),
-                                None
-                            )
-                            if seed_info and seed_info.get("entity_description"):
-                                entity_str = f"{seed_entity} {seed_info['entity_description']}"
-                                entity_strs.append(entity_str)
-                                entity_order.append(seed_entity)
+                        if entity_embeddings_dict:
+                            # Vectorized similarity computation for all entities at once
+                            entity_names_list = list(entity_embeddings_dict.keys())
+                            entity_embeddings_matrix = np.vstack([
+                                entity_embeddings_dict[name] for name in entity_names_list
+                            ])
 
-                        if entity_strs:
-                            batch_fallback = resolve_positive_int(global_config.get("llm_model_max_async", 4), 4)
-                            batch_size = resolve_positive_int(
-                                global_config.get("embedding_batch_size"),
-                                batch_fallback
-                            )
-                            entity_embeddings = await compute_embeddings_in_batches(
-                                entity_strs, embedding_func, batch_size
-                            )
+                            # Normalize query vector
+                            query_norm = np.linalg.norm(query_vec)
+                            if query_norm > 0:
+                                query_normalized = query_vec / query_norm
 
-                            for idx, entity_embedding in enumerate(entity_embeddings):
-                                entity_vec = np.array(entity_embedding)
-                                similarity = cosine_similarity(query_vec, entity_vec)
-                                entity_name = entity_order[idx]
-                                entity_similarities[entity_name] = similarity
+                                # Normalize entity embeddings matrix (row-wise)
+                                entity_norms = np.linalg.norm(entity_embeddings_matrix, axis=1, keepdims=True)
+                                entity_norms[entity_norms == 0] = 1  # Avoid division by zero
+                                entity_embeddings_normalized = entity_embeddings_matrix / entity_norms
 
-                        logger.debug(f"Computed query-aware similarities for {len(entity_similarities)} seed entities")
+                                # Compute all similarities with single matrix multiplication
+                                similarities = entity_embeddings_normalized @ query_normalized
+
+                                # Build result dictionary
+                                for idx, entity_name in enumerate(entity_names_list):
+                                    entity_similarities[entity_name] = float(similarities[idx])
+
+                        logger.info(f"Phase 1: Computed {len(entity_similarities)} entity similarities for query-aware seed weighting")
 
             except Exception as exc:
                 logger.warning(f"Could not compute query-aware similarities: {exc}")
@@ -494,38 +862,37 @@ class NodeEmbeddingEnhancer:
                             hl_query_vec = np.array(hl_query_embedding_result[0])
                             logger.debug("Computed hl_keywords embedding for PPR Phase 2")
 
-                        all_relations = await self.get_all_relations_cached(knowledge_graph_inst)
+                        # Try to get relation embeddings from Vector Storage first (same format as insert)
+                        # This avoids recomputing embeddings that were already computed during insert
+                        relation_embeddings_dict = await self._get_relation_embeddings_from_vdb(
+                            knowledge_graph_inst, global_config
+                        )
 
-                        rel_strs: List[str] = []
-                        rel_keywords_order: List[str] = []
+                        if relation_embeddings_dict:
+                            # Vectorized similarity computation for all relations at once
+                            edge_keys = list(relation_embeddings_dict.keys())  # List of (src_id, tgt_id) tuples
+                            rel_embeddings_matrix = np.vstack([
+                                relation_embeddings_dict[k]['vector'] for k in edge_keys
+                            ])
 
-                        for relation in all_relations:
-                            rel_keywords = relation.get("keywords", "")
-                            if rel_keywords.strip():
-                                rel_str = (
-                                    f"{rel_keywords}\t{relation.get('source_id', '')}\n"
-                                    f"{relation.get('target_id', '')}\n{relation.get('description', '')}"
-                                )
-                                rel_strs.append(rel_str)
-                                rel_keywords_order.append(rel_keywords)
+                            # Normalize query vector
+                            query_norm = np.linalg.norm(hl_query_vec)
+                            if query_norm > 0:
+                                hl_query_normalized = hl_query_vec / query_norm
 
-                        if rel_strs:
-                            batch_fallback = resolve_positive_int(global_config.get("llm_model_max_async", 4), 4)
-                            batch_size = resolve_positive_int(
-                                global_config.get("embedding_batch_size"),
-                                batch_fallback
-                            )
-                            rel_embeddings = await compute_embeddings_in_batches(
-                                rel_strs, embedding_func, batch_size
-                            )
+                                # Normalize relation embeddings matrix (row-wise)
+                                rel_norms = np.linalg.norm(rel_embeddings_matrix, axis=1, keepdims=True)
+                                rel_norms[rel_norms == 0] = 1  # Avoid division by zero
+                                rel_embeddings_normalized = rel_embeddings_matrix / rel_norms
 
-                            for idx, rel_embedding in enumerate(rel_embeddings):
-                                rel_vec = np.array(rel_embedding)
-                                similarity = cosine_similarity(hl_query_vec, rel_vec)
-                                rel_keywords = rel_keywords_order[idx]
-                                relation_similarities[rel_keywords] = similarity
+                                # Compute all similarities with single matrix multiplication
+                                similarities = rel_embeddings_normalized @ hl_query_normalized
 
-                        logger.debug(f"Computed query-aware relation similarities for {len(relation_similarities)} relations")
+                                # Build result dictionary - now keyed by (src_id, tgt_id) instead of keywords
+                                for idx, edge_key in enumerate(edge_keys):
+                                    relation_similarities[edge_key] = float(similarities[idx])
+
+                        logger.info(f"Phase 2: Computed {len(relation_similarities)} relation similarities for query-aware edge reweighting")
 
             except Exception as exc:
                 logger.warning(f"Could not compute relation similarities: {exc}")
@@ -572,11 +939,14 @@ class NodeEmbeddingEnhancer:
                 })
                 ppr_entities.append(entity_copy)
 
+        avg_ppr = (sum(e["pagerank_score"] for e in ppr_entities) / len(ppr_entities)) if ppr_entities else 0.0
         logger.info(
             "PPR analysis completed: %d entities with avg PageRank: %.4f",
             len(ppr_entities),
-            (sum(e["pagerank_score"] for e in ppr_entities) / len(ppr_entities)) if ppr_entities else 0.0,
+            avg_ppr,
         )
+
+
         return ppr_entities
 
     async def compute_adaptive_fastrp(
@@ -687,12 +1057,26 @@ class NodeEmbeddingEnhancer:
                     self._relations_cache = pickle.load(f)
                 logger.info(f"Loaded relations cache with {len(self._relations_cache)} relations")
 
+            # Load Relation embeddings cache
+            if os.path.exists(self.relation_embeddings_cache_path):
+                with open(self.relation_embeddings_cache_path, 'rb') as f:
+                    self._relation_embeddings_cache = pickle.load(f)
+                logger.info(f"Loaded relation embeddings cache for {len(self._relation_embeddings_cache)} relations")
+
+            # Load Entity embeddings cache
+            if os.path.exists(self.entity_embeddings_cache_path):
+                with open(self.entity_embeddings_cache_path, 'rb') as f:
+                    self._entity_embeddings_cache = pickle.load(f)
+                logger.info(f"Loaded entity embeddings cache for {len(self._entity_embeddings_cache)} entities")
+
         except Exception as e:
             logger.warning(f"Could not load persisted node embedding data: {e}")
             # Reset to empty state
             self.graph = None
             self.fastrp_embeddings = None
             self._relations_cache = None
+            self._relation_embeddings_cache = None
+            self._entity_embeddings_cache = None
 
     def _compute_query_aware_weights(
         self,

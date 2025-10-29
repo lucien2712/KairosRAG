@@ -2115,23 +2115,35 @@ async def merge_nodes_and_edges(
                 )
 
                 if edge_data is None:
+                    logger.debug(f"[VDB-INSERT] edge_data is None for {edge_key[0]} -> {edge_key[1]}, skipping VDB insert")
                     return None, []
 
+                # Debug: Check if relationships_vdb is available
+                if relationships_vdb is None:
+                    logger.warning(f"[VDB-INSERT] relationships_vdb is None for entire merge process")
+
                 if relationships_vdb is not None:
+                    # IMPORTANT: Content format must match _rebuild_single_relationship (line 1525)
+                    # Format: keywords\tsrc\ntgt\ndescription
+                    rel_content = f"{edge_data['keywords']}\t{edge_data['src_id']}\n{edge_data['tgt_id']}\n{edge_data['description']}"
+
+                    rel_vdb_id = compute_mdhash_id(
+                        edge_data["src_id"] + edge_data["tgt_id"], prefix="rel-"
+                    )
                     data_for_vdb = {
-                        compute_mdhash_id(
-                            edge_data["src_id"] + edge_data["tgt_id"], prefix="rel-"
-                        ): {
+                        rel_vdb_id: {
                             "src_id": edge_data["src_id"],
                             "tgt_id": edge_data["tgt_id"],
                             "keywords": edge_data["keywords"],
-                            "content": f"{edge_data['src_id']}\t{edge_data['tgt_id']}\n{edge_data['keywords']}\n{edge_data['description']}",
+                            "content": rel_content,
                             "source_id": edge_data["source_id"],
                             "file_path": edge_data.get("file_path", "unknown_source"),
                             "weight": edge_data.get("weight", 1.0),
+                            "description": edge_data["description"],
                         }
                     }
                     await relationships_vdb.upsert(data_for_vdb)
+                    logger.debug(f"[VDB-INSERT] Inserted relation: {edge_data['src_id']} -> {edge_data['tgt_id']}, ID: {rel_vdb_id}")
                 return edge_data, added_entities
 
     # Create relationship processing tasks
@@ -3108,6 +3120,10 @@ async def _semantic_expansion_plus_structural_analysis(
         active_methods.append(f"fastrp({query_param.top_fastrp_nodes})")
 
     logger.info(f"Three-way parallel expansion with active methods: {', '.join(active_methods)}")
+
+    # Add entities_vdb and relationships_vdb to global_config for PPR Phase 1 and Phase 2
+    global_config["entities_vdb"] = entities_vdb
+    global_config["relationships_vdb"] = relationships_vdb
 
     # Pre-compute query embeddings once for all methods (multi-hop + PPR)
     query_ll_embedding = None
