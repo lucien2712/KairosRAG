@@ -14,7 +14,7 @@ def compute_adaptive_fastrp_similarity(
     node_embedding
 ) -> float:
     """
-    Adaptive FastRP similarity calculation using precomputed 128-dimensional embeddings
+    Context-aware FastRP similarity calculation using precomputed 128-dimensional embeddings
     Computes cosine similarity between FastRP embedding vectors
 
     Args:
@@ -72,7 +72,7 @@ def compute_adaptive_fastrp_batch(
     candidate_entities: Optional[Iterable[str]] = None,
 ) -> Dict[str, float]:
     """
-    Vectorized Adaptive FastRP similarity calculation for multiple candidates.
+    Vectorized Context-aware FastRP similarity calculation for multiple candidates.
 
     Args:
         seed_entities: Seed entity names

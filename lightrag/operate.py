@@ -2733,14 +2733,15 @@ async def _get_entity_vectors_batch(
                         import base64
                         import numpy as np
                         import zlib
-                        
+
                         compressed_vector = base64.b64decode(vdb_data['vector'])
                         vector_bytes = zlib.decompress(compressed_vector)
                         vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
                         entity_vectors[entity_name] = vector_array.tolist()
                     except Exception as e:
                         logger.debug(f"Error decoding vector for {entity_name}: {e}")
-                        
+
+            logger.info(f"Multi-hop: Retrieved {len(entity_vectors)}/{len(entity_names)} entity vectors from VDB")
             return entity_vectors
         else:
             # Fallback: use regular get_by_ids (without vectors) - will still compute embeddings
@@ -2752,7 +2753,7 @@ async def _get_entity_vectors_batch(
         return {}
 
 async def _get_relationship_vectors_batch(
-    relationships: list[dict], 
+    relationships: list[dict],
     relationships_vdb: BaseVectorStorage
 ) -> dict[str, list[float]]:
     """Get relationship vectors in batch for multi-hop relevance calculation."""
@@ -2761,39 +2762,79 @@ async def _get_relationship_vectors_batch(
         from .utils import compute_mdhash_id
         rel_vdb_ids = []
         rel_keys = []
-        
+
         for rel in relationships:
             src_id = rel.get('src_id', '')
             tgt_id = rel.get('tgt_id', '')
             if src_id and tgt_id:
-                # Use same format as relationship storage
-                rel_key = f"{src_id}-{tgt_id}"
-                rel_keys.append(rel_key)
-                rel_vdb_ids.append(compute_mdhash_id(rel_key, prefix="rel-"))
+                # IMPORTANT: Must match insert format (line 2131) - no separator between src and tgt
+                # For undirected graphs, try BOTH directions (src+tgt and tgt+src)
+                rel_key_1 = src_id + tgt_id
+                rel_key_2 = tgt_id + src_id
+                vdb_id_1 = compute_mdhash_id(rel_key_1, prefix="rel-")
+                vdb_id_2 = compute_mdhash_id(rel_key_2, prefix="rel-")
+
+                # Add both possible IDs (VDB lookup will filter to existing ones)
+                rel_vdb_ids.append(vdb_id_1)
+                if vdb_id_2 != vdb_id_1:  # Avoid duplicates
+                    rel_vdb_ids.append(vdb_id_2)
+
+                # Store normalized key for later lookup (lexicographic order)
+                if src_id > tgt_id:
+                    normalized_key = f"{tgt_id}-{src_id}"
+                else:
+                    normalized_key = f"{src_id}-{tgt_id}"
+                rel_keys.append(normalized_key)
         
         # Check if relationships_vdb supports direct vector access (NanoVectorDB)
         if hasattr(relationships_vdb, '_get_client'):
             # Direct access for NanoVectorDB
             client = await relationships_vdb._get_client()
-            vdb_results = client.get(rel_vdb_ids)
-            
+            storage = getattr(client, '_NanoVectorDB__storage', None)
+
+            if storage is None:
+                logger.warning("Cannot access NanoVectorDB storage directly, using client.get()")
+                vdb_results = client.get(rel_vdb_ids)
+            else:
+                # Build ID lookup map from storage
+                storage_map = {item['__id__']: item for item in storage.get('data', [])}
+                # Get results for requested IDs
+                vdb_results = [storage_map.get(vdb_id) for vdb_id in rel_vdb_ids]
+
             relationship_vectors = {}
-            for i, vdb_data in enumerate(vdb_results):
+            for vdb_data in vdb_results:
                 if vdb_data and 'vector' in vdb_data:
-                    rel_key = rel_keys[i]
+                    # Get src_id and tgt_id from VDB data
+                    src_id = vdb_data.get('src_id')
+                    tgt_id = vdb_data.get('tgt_id')
+
+                    if not src_id or not tgt_id:
+                        continue
+
+                    # Normalize key using lexicographic order
+                    if src_id > tgt_id:
+                        normalized_key = f"{tgt_id}-{src_id}"
+                    else:
+                        normalized_key = f"{src_id}-{tgt_id}"
+
+                    # Skip if already decoded (avoid duplicate decoding for bidirectional edges)
+                    if normalized_key in relationship_vectors:
+                        continue
+
                     try:
                         # Decode NanoVectorDB format: base64 + zlib + float16
                         import base64
                         import numpy as np
                         import zlib
-                        
+
                         compressed_vector = base64.b64decode(vdb_data['vector'])
                         vector_bytes = zlib.decompress(compressed_vector)
                         vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
-                        relationship_vectors[rel_key] = vector_array.tolist()
+                        relationship_vectors[normalized_key] = vector_array.tolist()
                     except Exception as e:
-                        logger.debug(f"Error decoding vector for {rel_key}: {e}")
-                        
+                        logger.debug(f"Error decoding vector for {normalized_key}: {e}")
+
+            logger.info(f"Multi-hop: Retrieved {len(relationship_vectors)}/{len(rel_keys)} relationship vectors from VDB")
             return relationship_vectors
         else:
             # Fallback: use regular get_by_ids (without vectors) - will still compute embeddings
@@ -3004,8 +3045,13 @@ def _calculate_relevance_scores_vectorized(
                 edge = candidate.get("edge", {})
                 edge_src = edge.get('src_id', '')
                 edge_tgt = edge.get('tgt_id', '')
-                edge_key = f"{edge_src}-{edge_tgt}"
-                
+
+                # Normalize key using lexicographic order (matching _get_relationship_vectors_batch)
+                if edge_src > edge_tgt:
+                    edge_key = f"{edge_tgt}-{edge_src}"
+                else:
+                    edge_key = f"{edge_src}-{edge_tgt}"
+
                 if edge_key in relationship_vectors_cache:
                     relation_vectors.append(relationship_vectors_cache[edge_key])
                     valid_hl_indices.append(i)
@@ -3105,7 +3151,7 @@ async def _semantic_expansion_plus_structural_analysis(
     relationships_vdb: BaseVectorStorage,
     global_config: dict[str, str],
 ) -> tuple[list[dict], list[dict]]:
-    """Three-way parallel expansion: Multi-hop + PPR + Adaptive FastRP with independent pools.
+    """Three-way parallel expansion: Multi-hop + PPR + Context-aware FastRP with independent pools.
 
     Each method is independently controlled and will only execute if its parameter is > 0.
     """
