@@ -270,10 +270,11 @@ class NodeEmbeddingEnhancer:
         return self._relations_cache
 
     def invalidate_relations_cache(self):
-        """Invalidate relations cache (call when graph structure changes)."""
+        """Invalidate all caches when graph structure changes."""
         self._relations_cache = None
         self._relation_embeddings_cache = None
         self._entity_embeddings_cache = None
+
         # Remove both .pkl and .gz versions for backward compatibility
         for cache_path in [self.relations_cache_path, self.relations_cache_path + '.gz']:
             if os.path.exists(cache_path):
@@ -294,6 +295,8 @@ class NodeEmbeddingEnhancer:
                 logger.debug("Entity embeddings cache invalidated")
             except Exception as e:
                 logger.debug(f"Failed to remove entity embeddings cache file: {e}")
+
+        logger.debug("All caches invalidated")
 
     async def _get_relation_embeddings_from_vdb(
         self,
@@ -624,7 +627,7 @@ class NodeEmbeddingEnhancer:
         alpha: float = 0.3
     ) -> Dict[str, float]:
         """
-        Compute personalized PageRank scores for query-time reasoning with simplified edge reweighting.
+        Compute personalized PageRank scores with query-aware weighting.
 
         Args:
             seed_entities: List of entity IDs to use as personalization seeds
@@ -638,7 +641,7 @@ class NodeEmbeddingEnhancer:
         """
         if not self.graph or not seed_entities:
             return {}
-            
+
         try:
             # Create personalization vector
             personalization = {}
@@ -671,19 +674,14 @@ class NodeEmbeddingEnhancer:
                 # Temporarily set edge weights based on query-relation similarity
                 reweighted_edges = 0
                 skipped_edges = 0
-                temp_weights = []
                 for u, v, edge_data in self.graph.edges(data=True):
                     # Normalize edge key for undirected graphs (lexicographic order)
-                    if u > v:
-                        normalized_key = (v, u)
-                    else:
-                        normalized_key = (u, v)
+                    normalized_key = (v, u) if u > v else (u, v)
 
                     # Use similarity as weight if available, otherwise use original weight
                     if normalized_key in relation_similarities:
                         similarity = relation_similarities[normalized_key]
                         self.graph[u][v]['temp_weight'] = similarity
-                        temp_weights.append(similarity)
                         reweighted_edges += 1
                     else:
                         # Use original weight for edges without embeddings
@@ -707,8 +705,6 @@ class NodeEmbeddingEnhancer:
                 for u, v in self.graph.edges():
                     if 'temp_weight' in self.graph[u][v]:
                         del self.graph[u][v]['temp_weight']
-
-                logger.debug(f"Applied direct edge reweighting with {len(relation_similarities)} relation similarities")
             else:
                 # Compute PageRank with original weights
                 ppr_scores = nx.pagerank(
@@ -719,10 +715,10 @@ class NodeEmbeddingEnhancer:
                     tol=self.config.pagerank_tol,
                     weight='weight'
                 )
-            
+
             logger.info(f"Personalized PageRank computed for {len(ppr_scores)} nodes with {len(valid_seeds)} seeds")
             return ppr_scores
-            
+
         except Exception as e:
             logger.error(f"Error computing Personalized PageRank: {e}")
             return {}

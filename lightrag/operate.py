@@ -3613,21 +3613,41 @@ async def _original_multi_hop_expand(
     visited_relations = set()  # Track visited (src_id, tgt_id) pairs to prevent duplicates and cycles
     
     # BFS expansion for all hops
+    # Track prefetch task for next hop
+    prefetch_task = None
+
     for hop in range(1, query_param.max_hop + 1):
         logger.info(f"Multi-hop: Starting hop {hop} with {len(current_nodes)} current nodes")
         if not current_nodes:
             logger.info(f"Multi-hop: No current nodes at hop {hop}, stopping expansion")
+            # Cancel any pending prefetch
+            if prefetch_task and not prefetch_task.done():
+                prefetch_task.cancel()
             break
-            
+
         logger.debug(f"Processing hop {hop} with {len(current_nodes)} nodes")
         next_nodes = []
         hop_relations = []
-        
-        # Get neighbors for current nodes
+
+        # Get neighbors for current nodes (use prefetch if available)
         node_names = [node["entity_name"] for node in current_nodes]
-        # logger.info(f"Multi-hop: Fetching edges for {len(node_names)} nodes")
-        batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
-        # logger.info(f"Multi-hop: Retrieved edges dict with {len(batch_edges_dict)} entries")
+
+        # If prefetch task exists from previous hop, await it
+        if prefetch_task is not None:
+            try:
+                batch_edges_dict = await prefetch_task
+                logger.debug(f"Hop {hop}: Using prefetched edge data ({len(batch_edges_dict)} entries)")
+            except asyncio.CancelledError:
+                logger.debug(f"Hop {hop}: Prefetch cancelled, fetching normally")
+                batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
+            except Exception as e:
+                logger.warning(f"Hop {hop}: Prefetch failed ({e}), fetching normally")
+                batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
+            finally:
+                prefetch_task = None
+        else:
+            # No prefetch available, fetch normally
+            batch_edges_dict = await knowledge_graph_inst.get_nodes_edges_batch(node_names)
         
         # Collect all neighboring nodes and edges
         neighbor_candidates = []
@@ -3813,7 +3833,29 @@ async def _original_multi_hop_expand(
         if not selected:
             logger.debug(f"No relevant neighbors found at hop {hop}, stopping expansion")
             break
-        
+
+        # Collect next hop candidates for prefetching
+        next_hop_candidates = []
+        for node_data, _, _ in selected:
+            next_hop_candidates.append(node_data["entity_name"])
+
+        # Start prefetching next hop edges asynchronously (if not last hop)
+        if hop < query_param.max_hop and next_hop_candidates:
+            async def prefetch_next_hop_edges():
+                """Prefetch edges for next hop candidates."""
+                try:
+                    logger.debug(f"Prefetch: Starting edge fetch for {len(next_hop_candidates)} candidates (hop {hop+1})")
+                    result = await knowledge_graph_inst.get_nodes_edges_batch(next_hop_candidates)
+                    logger.debug(f"Prefetch: Completed edge fetch for hop {hop+1}")
+                    return result
+                except Exception as e:
+                    logger.debug(f"Prefetch: Failed for hop {hop+1}: {e}")
+                    raise
+
+            # Create prefetch task (non-blocking)
+            prefetch_task = asyncio.create_task(prefetch_next_hop_edges())
+            logger.debug(f"Prefetch: Started background task for hop {hop+1} ({len(next_hop_candidates)} nodes)")
+
         # Add selected neighbors to results (with relation deduplication and cycle prevention)
         for node_data, edge_data, score in selected:
             entity_name = node_data["entity_name"]
@@ -3832,8 +3874,12 @@ async def _original_multi_hop_expand(
 
         all_expanded_relations.extend(hop_relations)
         current_nodes = next_nodes
-        
-    
+
+    # Clean up any remaining prefetch task
+    if prefetch_task and not prefetch_task.done():
+        prefetch_task.cancel()
+        logger.debug("Cleaned up unused prefetch task")
+
     logger.info(f"Multi-hop expansion completed: {len(all_expanded_entities)} entities, {len(all_expanded_relations)} relations")
     return all_expanded_entities, all_expanded_relations
 
@@ -4146,64 +4192,108 @@ async def _build_query_context(
                 )
                 relation_query_embedding = None
 
-    # Handle local and global modes
-    if query_param.mode == "local" and len(ll_keywords) > 0:
-        local_entities, local_relations = await _get_node_data(
-            ll_keywords,
-            knowledge_graph_inst,
-            entities_vdb,
-            query_param,
-            global_config,
-            query_embedding=node_query_embedding,
-        )
+    # Build task list for parallel execution of independent queries
+    tasks = []
+    task_names = []
 
-    elif query_param.mode == "global" and len(hl_keywords) > 0:
-        global_relations, global_entities = await _get_edge_data(
-            hl_keywords,
-            knowledge_graph_inst,
-            relationships_vdb,
-            query_param,
-            query_embedding=relation_query_embedding,
-        )
+    # Determine which queries to execute based on mode and keywords
+    if query_param.mode == "local":
+        if len(ll_keywords) > 0:
+            tasks.append(
+                _get_node_data(
+                    ll_keywords,
+                    knowledge_graph_inst,
+                    entities_vdb,
+                    query_param,
+                    global_config,
+                    query_embedding=node_query_embedding,
+                )
+            )
+            task_names.append("local_query")
+
+    elif query_param.mode == "global":
+        if len(hl_keywords) > 0:
+            tasks.append(
+                _get_edge_data(
+                    hl_keywords,
+                    knowledge_graph_inst,
+                    relationships_vdb,
+                    query_param,
+                    query_embedding=relation_query_embedding,
+                )
+            )
+            task_names.append("global_query")
 
     else:  # hybrid or mix mode
         if len(ll_keywords) > 0:
-            local_entities, local_relations = await _get_node_data(
-                ll_keywords,
-                knowledge_graph_inst,
-                entities_vdb,
-                query_param,
-                global_config,
-                query_embedding=node_query_embedding,
+            tasks.append(
+                _get_node_data(
+                    ll_keywords,
+                    knowledge_graph_inst,
+                    entities_vdb,
+                    query_param,
+                    global_config,
+                    query_embedding=node_query_embedding,
+                )
             )
-        if len(hl_keywords) > 0:
-            global_relations, global_entities = await _get_edge_data(
-                hl_keywords,
-                knowledge_graph_inst,
-                relationships_vdb,
-                query_param,
-                query_embedding=relation_query_embedding,
-            )
+            task_names.append("local_query")
 
-        # Get vector chunks first if in mix mode
-        if query_param.mode == "mix" and chunks_vdb:
-            vector_chunks = await _get_vector_context(
-                query,
-                chunks_vdb,
-                query_param,
-                query_embedding,
+        if len(hl_keywords) > 0:
+            tasks.append(
+                _get_edge_data(
+                    hl_keywords,
+                    knowledge_graph_inst,
+                    relationships_vdb,
+                    query_param,
+                    query_embedding=relation_query_embedding,
+                )
             )
-            # Track vector chunks with source metadata
-            for i, chunk in enumerate(vector_chunks):
-                chunk_id = chunk.get("chunk_id") or chunk.get("id")
-                if chunk_id:
-                    chunk_tracking[chunk_id] = {
-                        "source": "C",
-                        "frequency": 1,  # Vector chunks always have frequency 1
-                        "order": i + 1,  # 1-based order in vector search results
-                    }
-                else:
-                    logger.warning(f"Vector chunk missing chunk_id: {chunk}")
+            task_names.append("global_query")
+
+        # Add vector chunk query for mix mode
+        if query_param.mode == "mix" and chunks_vdb:
+            tasks.append(
+                _get_vector_context(
+                    query,
+                    chunks_vdb,
+                    query_param,
+                    query_embedding,
+                )
+            )
+            task_names.append("vector_chunks")
+
+    # Execute all queries in parallel
+    if tasks:
+        logger.debug(
+            f"Executing {len(tasks)} independent queries in parallel: {task_names}"
+        )
+        results = await asyncio.gather(*tasks)
+
+        # Unpack results based on task execution order
+        result_idx = 0
+        for task_name in task_names:
+            if task_name == "local_query":
+                local_entities, local_relations = results[result_idx]
+            elif task_name == "global_query":
+                global_relations, global_entities = results[result_idx]
+            elif task_name == "vector_chunks":
+                vector_chunks = results[result_idx]
+                # Track vector chunks with source metadata
+                for i, chunk in enumerate(vector_chunks):
+                    chunk_id = chunk.get("chunk_id") or chunk.get("id")
+                    if chunk_id:
+                        chunk_tracking[chunk_id] = {
+                            "source": "C",
+                            "frequency": 1,  # Vector chunks always have frequency 1
+                            "order": i + 1,  # 1-based order in vector search results
+                        }
+                    else:
+                        logger.warning(f"Vector chunk missing chunk_id: {chunk}")
+            result_idx += 1
+
+        logger.debug(f"Parallel query execution completed: {len(tasks)} queries")
+    else:
+        logger.debug("No queries to execute based on mode and keywords")
 
     # Use round-robin merge to combine local and global data fairly
     final_entities = []
