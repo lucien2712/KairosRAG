@@ -4117,6 +4117,35 @@ async def _build_query_context(
                 logger.warning(f"Failed to pre-compute query embedding: {e}")
                 query_embedding = None
 
+    # Pre-compute entity and relation query embeddings to avoid repeated calls
+    node_query_embedding: list[float] | None = None
+    if ll_keywords.strip() and getattr(entities_vdb, "embedding_func", None):
+        embedding_func = entities_vdb.embedding_func
+        if embedding_func and getattr(embedding_func, "func", None):
+            try:
+                node_embedding_result = await embedding_func.func([ll_keywords])
+                node_query_embedding = node_embedding_result[0]
+                logger.debug("Pre-computed ll_keywords embedding for node retrieval")
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to pre-compute ll_keywords embedding for node retrieval: {exc}"
+                )
+                node_query_embedding = None
+
+    relation_query_embedding: list[float] | None = None
+    if hl_keywords.strip() and getattr(relationships_vdb, "embedding_func", None):
+        embedding_func = relationships_vdb.embedding_func
+        if embedding_func and getattr(embedding_func, "func", None):
+            try:
+                relation_embedding_result = await embedding_func.func([hl_keywords])
+                relation_query_embedding = relation_embedding_result[0]
+                logger.debug("Pre-computed hl_keywords embedding for edge retrieval")
+            except Exception as exc:
+                logger.warning(
+                    f"Failed to pre-compute hl_keywords embedding for edge retrieval: {exc}"
+                )
+                relation_query_embedding = None
+
     # Handle local and global modes
     if query_param.mode == "local" and len(ll_keywords) > 0:
         local_entities, local_relations = await _get_node_data(
@@ -4125,6 +4154,7 @@ async def _build_query_context(
             entities_vdb,
             query_param,
             global_config,
+            query_embedding=node_query_embedding,
         )
 
     elif query_param.mode == "global" and len(hl_keywords) > 0:
@@ -4133,6 +4163,7 @@ async def _build_query_context(
             knowledge_graph_inst,
             relationships_vdb,
             query_param,
+            query_embedding=relation_query_embedding,
         )
 
     else:  # hybrid or mix mode
@@ -4143,6 +4174,7 @@ async def _build_query_context(
                 entities_vdb,
                 query_param,
                 global_config,
+                query_embedding=node_query_embedding,
             )
         if len(hl_keywords) > 0:
             global_relations, global_entities = await _get_edge_data(
@@ -4150,6 +4182,7 @@ async def _build_query_context(
                 knowledge_graph_inst,
                 relationships_vdb,
                 query_param,
+                query_embedding=relation_query_embedding,
             )
 
         # Get vector chunks first if in mix mode
@@ -5484,6 +5517,7 @@ async def _get_node_data(
     entities_vdb: BaseVectorStorage,
     query_param: QueryParam,
     global_config: dict[str, str] = None,
+    query_embedding: list[float] | None = None,
 ):
     # get similar entities
     logger.info(
@@ -5491,7 +5525,11 @@ async def _get_node_data(
     )
 
     # Always use regular text embeddings for initial entity retrieval
-    results = await entities_vdb.query(query, top_k=query_param.top_k)
+    results = await entities_vdb.query(
+        query,
+        top_k=query_param.top_k,
+        query_embedding=query_embedding,
+    )
 
     if not len(results):
         return [], []
@@ -5713,12 +5751,17 @@ async def _get_edge_data(
     knowledge_graph_inst: BaseGraphStorage,
     relationships_vdb: BaseVectorStorage,
     query_param: QueryParam,
+    query_embedding: list[float] | None = None,
 ):
     logger.info(
         f"Query edges: {keywords}, top_k: {query_param.top_k}, cosine: {relationships_vdb.cosine_better_than_threshold}"
     )
 
-    results = await relationships_vdb.query(keywords, top_k=query_param.top_k)
+    results = await relationships_vdb.query(
+        keywords,
+        top_k=query_param.top_k,
+        query_embedding=query_embedding,
+    )
 
     if not len(results):
         return [], []
