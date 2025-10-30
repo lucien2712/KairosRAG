@@ -97,3 +97,4 @@ plan.txt
 query_mistral.py
 pipeline.txt
 *.png
+*.txt
