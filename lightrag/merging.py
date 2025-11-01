@@ -142,51 +142,83 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             edge_tuples = await rag_instance.chunk_entity_relation_graph.get_node_edges(a_entity_id)
 
             if edge_tuples:
-                for src_id, tgt_id in edge_tuples:
-                    # Get the full edge data
-                    edge = await rag_instance.chunk_entity_relation_graph.get_edge(src_id, tgt_id)
+                # Batch fetch all edge data in parallel
+                edge_data_tasks = [
+                    rag_instance.chunk_entity_relation_graph.get_edge(src_id, tgt_id)
+                    for src_id, tgt_id in edge_tuples
+                ]
+                all_edges = await asyncio.gather(*edge_data_tasks)
 
-                    if edge and 'description' in edge:
-                        description = edge['description']
-                        description_list = description.split('\n\n')
+                # Prepare summarization tasks
+                async def process_relationship(edge, src_id, tgt_id):
+                    if not edge or 'description' not in edge:
+                        return None
 
-                        # Use same summarization logic for relationships
-                        summarized_desc, llm_used = await _handle_entity_relation_summary(
-                            description_type="Relationship",
-                            entity_or_relation_name=f"{src_id} -> {tgt_id}",
-                            description_list=description_list,
-                            global_config=global_config,
-                            llm_response_cache=rag_instance.llm_response_cache,
-                            seperator="\n\n"
+                    description = edge['description']
+                    description_list = description.split('\n\n')
+
+                    # Use same summarization logic for relationships
+                    summarized_desc, llm_used = await _handle_entity_relation_summary(
+                        description_type="Relationship",
+                        entity_or_relation_name=f"{src_id} -> {tgt_id}",
+                        description_list=description_list,
+                        global_config=global_config,
+                        llm_response_cache=rag_instance.llm_response_cache,
+                        seperator="\n\n"
+                    )
+
+                    # Only return update data if description changed
+                    if summarized_desc != description:
+                        return {
+                            'src_id': src_id,
+                            'tgt_id': tgt_id,
+                            'edge': edge,
+                            'summarized_desc': summarized_desc,
+                            'llm_used': llm_used
+                        }
+                    return None
+
+                # Process all relationships in parallel
+                relationship_tasks = [
+                    process_relationship(edge, src_id, tgt_id)
+                    for edge, (src_id, tgt_id) in zip(all_edges, edge_tuples)
+                ]
+                relationship_results = await asyncio.gather(*relationship_tasks)
+
+                # Filter out None results and batch update
+                updates_to_apply = [r for r in relationship_results if r is not None]
+
+                if updates_to_apply:
+                    # Batch update graph storage
+                    graph_update_tasks = [
+                        rag_instance.chunk_entity_relation_graph.upsert_edge(
+                            update['src_id'],
+                            update['tgt_id'],
+                            {**update['edge'], 'description': update['summarized_desc']}
                         )
+                        for update in updates_to_apply
+                    ]
 
-                        # Update relationship if description changed
-                        if summarized_desc != description:
-                            # Update graph storage
-                            updated_edge_data = dict(edge)
-                            updated_edge_data['description'] = summarized_desc
-                            await rag_instance.chunk_entity_relation_graph.upsert_edge(
-                                src_id,
-                                tgt_id,
-                                updated_edge_data
-                            )
+                    # Batch update vector database
+                    vdb_update_tasks = [
+                        rag_instance.relationships_vdb.upsert(
+                            {compute_mdhash_id(update['src_id'] + update['tgt_id'], prefix="rel-"): {
+                                "src_id": update['src_id'],
+                                "tgt_id": update['tgt_id'],
+                                "content": f"{update['edge'].get('keywords', '')}\\t{update['src_id']}\\n{update['tgt_id']}\\n{update['summarized_desc']}"
+                            }}
+                        )
+                        for update in updates_to_apply
+                    ]
 
-                            # Update vector database
-                            rel_vdb_id = compute_mdhash_id(src_id + tgt_id, prefix="rel-")
-                            keywords = edge.get('keywords', '')
-                            rel_content = f"{keywords}\t{src_id}\n{tgt_id}\n{summarized_desc}"
+                    # Execute all updates in parallel
+                    await asyncio.gather(*graph_update_tasks, *vdb_update_tasks)
 
-                            await rag_instance.relationships_vdb.upsert(
-                                {rel_vdb_id: {
-                                    "src_id": src_id,
-                                    "tgt_id": tgt_id,
-                                    "content": rel_content
-                                }}
-                            )
-
-                            summarization_stats["relations_summarized"] += 1
-                            if llm_used:
-                                summarization_stats["relation_llm_calls"] += 1
+                    # Update statistics
+                    summarization_stats["relations_summarized"] += len(updates_to_apply)
+                    summarization_stats["relation_llm_calls"] += sum(
+                        1 for update in updates_to_apply if update['llm_used']
+                    )
 
             # print(f"TOOL COMPLETED: Merge {b_entity_id} -> {a_entity_id}")
             return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
@@ -258,49 +290,70 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
 
     # Step 2: Extract entity information and embeddings
     print(f"Extracting entity information and embeddings...")
-    entities = []
-    entity_embeddings = []
 
-    if entities_vdb_data:
-        sample_entity = next(iter(entities_vdb_data.values()))
+    # Helper function for parallel vector decoding
+    def decode_single_vector(vector_encoded: str) -> np.ndarray:
+        """Decode base64 + zlib compressed vector (CPU-intensive operation)."""
+        try:
+            compressed_vector = base64.b64decode(vector_encoded)
+            vector_bytes = zlib.decompress(compressed_vector)
+            return np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+        except Exception as e:
+            return None
 
+    # Prepare data for parallel processing
+    entity_names = []
+    encoded_vectors = []
+    descriptions = []
 
     for entity_name, entity_data in entities_vdb_data.items():
-        # print(f"Processing entity: {entity_name}")
-        # print(f"    - Has content: {'content' in entity_data}")
-        # print(f"    - Has vector: {'vector' in entity_data}")
-
         if 'content' in entity_data and 'vector' in entity_data:
-            # Get description from graph node data
             node_data = entity_id_to_node.get(entity_name, {})
             description = node_data.get('description', '')
 
-            # print(f"    - Found in graph: {entity_name in entity_id_to_node}")
-            # print(f"    - Description length: {len(description)}")
+            entity_names.append(entity_name)
+            encoded_vectors.append(entity_data['vector'])
+            descriptions.append(description)
 
-            # Decode the base64 vector (matching nano_vector_db_impl storage format)
-            try:
-                # Decode base64
-                compressed_vector = base64.b64decode(entity_data['vector'])
-                # Decompress with zlib
-                vector_bytes = zlib.decompress(compressed_vector)
-                # Convert to numpy array (stored as float16, convert to float32)
-                vector_array = np.frombuffer(vector_bytes, dtype=np.float16).astype(np.float32)
+    # Parallel vector decoding using thread pool (asyncio-compatible)
+    # Note: Using ThreadPoolExecutor since base64/zlib releases GIL
+    from concurrent.futures import ThreadPoolExecutor
+    import asyncio
 
-                # Only add if we have a reasonable vector size
-                if len(vector_array) > 0:
-                    entities.append({
-                        'entity_id': entity_name,
-                        'description': description,
-                    })
-                    entity_embeddings.append(vector_array.tolist())
-                    # print(f"    - Added to entities list (vector dim: {len(vector_array)})")
-                else:
-                    print(f"    - Empty vector after processing")
-            except Exception as e:
-                print(f"    - Error decoding vector: {e}")
+    async def decode_vectors_parallel(encoded_vectors):
+        """Decode all vectors in parallel using thread pool."""
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=min(32, len(encoded_vectors))) as executor:
+            # Submit all decoding tasks
+            futures = [
+                loop.run_in_executor(executor, decode_single_vector, vec)
+                for vec in encoded_vectors
+            ]
+            # Wait for all to complete
+            return await asyncio.gather(*futures)
+
+    # Decode all vectors in parallel
+    if encoded_vectors:
+        print(f"Decoding {len(encoded_vectors)} vectors in parallel...")
+        decoded_vectors = await decode_vectors_parallel(encoded_vectors)
+    else:
+        decoded_vectors = []
+
+    # Build entities and embeddings lists (keep as numpy arrays, not lists)
+    entities = []
+    entity_embeddings = []
+
+    for entity_name, description, vector_array in zip(entity_names, descriptions, decoded_vectors):
+        if vector_array is not None and len(vector_array) > 0:
+            entities.append({
+                'entity_id': entity_name,
+                'description': description,
+            })
+            entity_embeddings.append(vector_array)  # Keep as numpy array (optimization #4)
+        elif vector_array is None:
+            print(f"    - Error decoding vector for: {entity_name}")
         else:
-            print(f"    - Missing required fields")
+            print(f"    - Empty vector for: {entity_name}")
 
     print(f"Successfully extracted {len(entities)} entities with embeddings")
 
@@ -331,24 +384,30 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             "similarity_threshold": threshold
         }
 
-    # Check and standardize vector dimensions
-    vector_dimensions = [len(emb) for emb in entity_embeddings]
-    max_dim = max(vector_dimensions)
-    min_dim = min(vector_dimensions)
+    # Check and standardize vector dimensions (vectorized approach)
+    vector_dimensions = np.array([len(emb) for emb in entity_embeddings])
+    max_dim = int(vector_dimensions.max())
+    min_dim = int(vector_dimensions.min())
 
-    # print(f"Vector dimensions - Min: {min_dim}, Max: {max_dim}")
+    # Warn if inconsistent dimensions detected
+    unique_dims = np.unique(vector_dimensions)
+    if len(unique_dims) > 1:
+        logger.warning(
+            f"Inconsistent vector dimensions detected: {unique_dims.tolist()}. "
+            f"This may indicate different embedding models were used. "
+            f"Padding/truncating to {max_dim} dimensions."
+        )
 
-    # Pad shorter vectors with zeros to match the longest
-    standardized_embeddings = []
-    for emb in entity_embeddings:
-        if len(emb) < max_dim:
-            padded_emb = emb + [0.0] * (max_dim - len(emb))
-            standardized_embeddings.append(padded_emb)
-        else:
-            standardized_embeddings.append(emb[:max_dim])  # Truncate if longer
-
+    # Vectorized padding: pre-allocate array and fill (much faster than loop + list concatenation)
     try:
-        embeddings = np.array(standardized_embeddings, dtype=np.float32)
+        embeddings = np.zeros((len(entity_embeddings), max_dim), dtype=np.float32)
+        for i, emb in enumerate(entity_embeddings):
+            emb_len = len(emb)
+            if emb_len <= max_dim:
+                embeddings[i, :emb_len] = emb  # Pad with zeros automatically
+            else:
+                embeddings[i, :] = emb[:max_dim]  # Truncate if longer
+
         # print(f"Created embeddings array: {embeddings.shape}")
 
         # Normalize vectors for cosine similarity
@@ -373,16 +432,34 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             "error": str(e)
         }
 
-    # Step 4: Find candidate pairs above threshold
+    # Step 4: Find candidate pairs above threshold (vectorized for performance)
     print(f"Filtering candidate pairs with similarity >= {threshold}...")
-    candidate_pairs = []
-    for i in range(len(entities)):
-        for j in range(i + 1, len(entities)):
-            similarity = similarity_matrix[i, j]
-            if similarity >= threshold:
-                candidate_pairs.append((i, j, float(similarity)))
 
-    print(f"Found {len(candidate_pairs)} candidate pairs for LLM evaluation")
+    # Vectorized extraction using numpy - much faster for large entity sets
+    # Get upper triangle indices (i < j) to avoid duplicate pairs
+    upper_triangle_indices = np.triu_indices_from(similarity_matrix, k=1)
+    similarities = similarity_matrix[upper_triangle_indices]
+
+    # Filter by threshold using boolean indexing
+    mask = similarities >= threshold
+    filtered_indices = np.where(mask)[0]
+
+    # Build candidate pairs list
+    candidate_pairs = [
+        (
+            int(upper_triangle_indices[0][idx]),  # i index
+            int(upper_triangle_indices[1][idx]),  # j index
+            float(similarities[idx])              # similarity score
+        )
+        for idx in filtered_indices
+    ]
+
+    # Sort by similarity descending - process most similar pairs first
+    # This improves merging efficiency: highly similar entities are more likely to merge,
+    # and their merges may cascade to related entities
+    candidate_pairs.sort(key=lambda x: x[2], reverse=True)
+
+    print(f"Found {len(candidate_pairs)} candidate pairs for LLM evaluation (sorted by similarity)")
 
     # Step 5: LLM decision making for candidate pairs
     print(f"Starting LLM evaluation of candidate pairs...")
@@ -418,6 +495,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             return await llm_with_tools.ainvoke(messages)
 
     pending_tasks: list[dict[str, Any]] = []
+    cached_pairs_to_apply: list[dict[str, Any]] = []  # Collect cached merge pairs
 
     async def process_next_pending_task():
         nonlocal llm_evaluated_pairs, merged_pairs, cached_merges, cached_skips, skipped_already_merged
@@ -524,6 +602,13 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         # Update statistics for LLM evaluations (count once per final evaluation)
         llm_evaluated_pairs += 1
 
+    # Pre-compute entity content hashes (optimization #3)
+    print(f"Pre-computing entity content hashes...")
+    entity_hashes = {}
+    for i, entity in enumerate(entities):
+        content = f"{entity['entity_id']}|{entity['description']}"
+        entity_hashes[i] = hashlib.md5(content.encode("utf-8")).hexdigest()
+
     # Process all candidate pairs with progress bar
     pbar = atqdm(
         candidate_pairs,
@@ -547,59 +632,26 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         entity_a = entities[i]
         entity_b = entities[j]
 
-        # Create hash key for this entity pair based on content (not ID)
-        content_a = f"{entity_a['entity_id']}|{entity_a['description']}"
-        content_b = f"{entity_b['entity_id']}|{entity_b['description']}"
-        hash_a = hashlib.md5(content_a.encode("utf-8")).hexdigest()
-        hash_b = hashlib.md5(content_b.encode("utf-8")).hexdigest()
+        # Use pre-computed hashes (optimization #3)
+        hash_a = entity_hashes[i]
+        hash_b = entity_hashes[j]
 
         # Create consistent pair key (sorted to ensure consistent ordering)
         pair_key = f"{min(hash_a, hash_b)}_{max(hash_a, hash_b)}"
 
-        # Check cache first
+        # Check cache first - collect for batch processing later
         if pair_key in entity_pair_cache:
-            # Process any pending asynchronous evaluations before applying cached decision
-            while pending_tasks:
-                await process_next_pending_task()
-
             cached_result = entity_pair_cache[pair_key]
 
             if cached_result["decision"] == "merged":
-                cached_merges += 1
-
-                try:
-                    current_entities = await rag_instance.chunk_entity_relation_graph.get_node(
-                        entity_a["entity_id"]
-                    )
-                    target_entities = await rag_instance.chunk_entity_relation_graph.get_node(
-                        entity_b["entity_id"]
-                    )
-
-                    if current_entities is None or target_entities is None:
-                        skipped_already_merged += 1
-                        active_entities.discard(j)
-                        print(
-                            f"SKIPPED: Entities already merged - {entity_a['entity_id']} & {entity_b['entity_id']}"
-                        )
-                        continue
-
-                    result = await merge_entities_tool.ainvoke(
-                        {
-                            "a_entity_id": entity_a["entity_id"],
-                            "b_entity_id": entity_b["entity_id"],
-                        }
-                    )
-
-                    updated_node = await rag_instance.chunk_entity_relation_graph.get_node(
-                        entity_a["entity_id"]
-                    )
-                    if updated_node and "description" in updated_node:
-                        entities[i]["description"] = updated_node["description"]
-
-                    active_entities.discard(j)
-                    merged_pairs += 1
-                except Exception as e:
-                    print(f"Failed to apply cached merge: {e}")
+                # Collect cached merge pairs for batch processing
+                cached_pairs_to_apply.append({
+                    'i': i,
+                    'j': j,
+                    'entity_a': entity_a,
+                    'entity_b': entity_b,
+                    'cached_result': cached_result
+                })
             else:
                 cached_skips += 1
             continue
@@ -650,6 +702,76 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
                 'remaining': len(pending_tasks)
             })
         pbar_remaining.close()
+
+    # Apply cached merges in batch (after all LLM evaluations complete)
+    if cached_pairs_to_apply:
+        print(f"\nApplying {len(cached_pairs_to_apply)} cached merge decisions...")
+
+        # Batch validate entity existence
+        validation_tasks = []
+        for cached_pair in cached_pairs_to_apply:
+            validation_tasks.append(
+                rag_instance.chunk_entity_relation_graph.get_node(cached_pair['entity_a']["entity_id"])
+            )
+            validation_tasks.append(
+                rag_instance.chunk_entity_relation_graph.get_node(cached_pair['entity_b']["entity_id"])
+            )
+
+        validation_results = await asyncio.gather(*validation_tasks)
+
+        # Process cached merges
+        merge_tasks = []
+        for idx, cached_pair in enumerate(cached_pairs_to_apply):
+            i = cached_pair['i']
+            j = cached_pair['j']
+
+            # Check validation results (2 nodes per pair)
+            entity_a_exists = validation_results[idx * 2]
+            entity_b_exists = validation_results[idx * 2 + 1]
+
+            # Skip if either entity has already been merged
+            if i not in active_entities or j not in active_entities:
+                continue
+
+            if entity_a_exists is None or entity_b_exists is None:
+                skipped_already_merged += 1
+                active_entities.discard(j)
+                print(
+                    f"SKIPPED (cached): Entities already merged - {cached_pair['entity_a']['entity_id']} & {cached_pair['entity_b']['entity_id']}"
+                )
+                continue
+
+            # Schedule merge operation
+            merge_tasks.append({
+                'task': merge_entities_tool.ainvoke({
+                    "a_entity_id": cached_pair['entity_a']["entity_id"],
+                    "b_entity_id": cached_pair['entity_b']["entity_id"],
+                }),
+                'i': i,
+                'j': j,
+                'entity_a_id': cached_pair['entity_a']["entity_id"]
+            })
+
+        # Execute all cached merges in parallel
+        if merge_tasks:
+            merge_results = await asyncio.gather(*[mt['task'] for mt in merge_tasks], return_exceptions=True)
+
+            # Update entity descriptions and active_entities
+            for merge_task, result in zip(merge_tasks, merge_results):
+                if isinstance(result, Exception):
+                    print(f"Failed to apply cached merge: {result}")
+                    continue
+
+                # Update entity description
+                updated_node = await rag_instance.chunk_entity_relation_graph.get_node(
+                    merge_task['entity_a_id']
+                )
+                if updated_node and "description" in updated_node:
+                    entities[merge_task['i']]["description"] = updated_node["description"]
+
+                active_entities.discard(merge_task['j'])
+                merged_pairs += 1
+                cached_merges += 1
 
     processing_time = time_module.time() - start_time
     remaining_entities = len(active_entities)
