@@ -98,3 +98,4 @@ query_mistral.py
 pipeline.txt
 *.png
 *.txt
+index_mistral.py

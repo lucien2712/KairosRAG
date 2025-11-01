@@ -38,7 +38,37 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
     if os.path.exists(cache_file_path):
         try:
             with open(cache_file_path, 'r', encoding='utf-8') as f:
-                entity_pair_cache = json.load(f)
+                loaded_cache = json.load(f)
+
+            # Migrate old cache format to new format if needed
+            # Old format: key = "hash1_hash2" (based on description hashes)
+            # New format: key = "entityA_entityB" (based on entity IDs)
+            migrated_cache = {}
+            old_format_count = 0
+
+            for key, value in loaded_cache.items():
+                # Check if this is new format (has entity_a_id and entity_b_id in value)
+                if "entity_a_id" in value and "entity_b_id" in value:
+                    # New format - check if key is entity-based or hash-based
+                    entity_a_id = value["entity_a_id"]
+                    entity_b_id = value["entity_b_id"]
+                    entity_pair_id = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
+
+                    if key == entity_pair_id:
+                        # Already in new format
+                        migrated_cache[key] = value
+                    else:
+                        # Old hash-based key with entity IDs in value - migrate
+                        old_format_count += 1
+                        migrated_cache[entity_pair_id] = value
+                else:
+                    # Very old format without entity IDs - cannot migrate, skip
+                    old_format_count += 1
+                    logger.warning(f"Skipping old cache entry without entity IDs: {key}")
+
+            entity_pair_cache = migrated_cache
+            if old_format_count > 0:
+                print(f"Migrated {old_format_count} cache entries from old format to new format")
             print(f"Loaded {len(entity_pair_cache)} cached entity pair comparisons")
         except Exception as e:
             print(f"Failed to load entity pair cache: {e}")
@@ -576,7 +606,8 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
                     entity_a_id
                 )
                 if updated_node and "description" in updated_node:
-                    entities[i]["description"] = updated_node["description"]
+                    new_desc = updated_node["description"]
+                    entities[i]["description"] = new_desc
 
                 active_entities.discard(j)
                 merged_pairs += 1
@@ -584,14 +615,18 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             else:
                 decision = "skipped"
 
-        # Cache decision using latest descriptions
+        # Cache decision using entity pair ID and description hashes
         content_a_final = f"{entity_a_id}|{desc_a_used}"
         content_b_final = f"{entity_b_id}|{desc_b_used}"
         hash_a_final = hashlib.md5(content_a_final.encode("utf-8")).hexdigest()
         hash_b_final = hashlib.md5(content_b_final.encode("utf-8")).hexdigest()
-        pair_key_final = f"{min(hash_a_final, hash_b_final)}_{max(hash_a_final, hash_b_final)}"
 
-        entity_pair_cache[pair_key_final] = {
+        # Create entity pair ID (based on entity IDs, not description hashes)
+        entity_pair_id_final = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
+
+        entity_pair_cache[entity_pair_id_final] = {
+            "hash_a": hash_a_final,
+            "hash_b": hash_b_final,
             "decision": decision,
             "similarity": float(similarity),
             "timestamp": time_module.strftime("%Y-%m-%d %H:%M:%S"),
@@ -602,12 +637,14 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         # Update statistics for LLM evaluations (count once per final evaluation)
         llm_evaluated_pairs += 1
 
-    # Pre-compute entity content hashes (optimization #3)
-    print(f"Pre-computing entity content hashes...")
+    # Pre-compute entity description hashes for cache comparison
+    print(f"Pre-computing entity description hashes...")
     entity_hashes = {}
     for i, entity in enumerate(entities):
         content = f"{entity['entity_id']}|{entity['description']}"
         entity_hashes[i] = hashlib.md5(content.encode("utf-8")).hexdigest()
+
+    logger.info(f"Pre-computed {len(entity_hashes)} entity description hashes")
 
     # Process all candidate pairs with progress bar
     pbar = atqdm(
@@ -632,28 +669,59 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         entity_a = entities[i]
         entity_b = entities[j]
 
-        # Use pre-computed hashes (optimization #3)
+        # Use pre-computed hashes (current description hashes)
         hash_a = entity_hashes[i]
         hash_b = entity_hashes[j]
 
-        # Create consistent pair key (sorted to ensure consistent ordering)
-        pair_key = f"{min(hash_a, hash_b)}_{max(hash_a, hash_b)}"
+        # Create entity pair ID (based on entity IDs, not descriptions)
+        entity_a_id = entity_a['entity_id']
+        entity_b_id = entity_b['entity_id']
+        entity_pair_id = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
 
-        # Check cache first - collect for batch processing later
-        if pair_key in entity_pair_cache:
-            cached_result = entity_pair_cache[pair_key]
+        # Check cache with new logic
+        should_evaluate = False  # Default: do not evaluate
+        cache_reason = ""
 
-            if cached_result["decision"] == "merged":
-                # Collect cached merge pairs for batch processing
+        if entity_pair_id in entity_pair_cache:
+            cached_data = entity_pair_cache[entity_pair_id]
+
+            # Case 1: Already merged - skip (don't need to compare again)
+            if cached_data["decision"] == "merged":
                 cached_pairs_to_apply.append({
                     'i': i,
                     'j': j,
                     'entity_a': entity_a,
                     'entity_b': entity_b,
-                    'cached_result': cached_result
+                    'cached_result': cached_data
                 })
-            else:
+                logger.debug(
+                    f"Cache HIT (merged before): {entity_a_id} vs {entity_b_id}"
+                )
+                continue
+
+            # Case 2: Previously skipped - check if descriptions changed
+            cached_hash_a = cached_data.get("hash_a", "")
+            cached_hash_b = cached_data.get("hash_b", "")
+
+            if hash_a == cached_hash_a and hash_b == cached_hash_b:
+                # Case 2a: Descriptions unchanged - use cache (skip)
                 cached_skips += 1
+                logger.debug(
+                    f"Cache HIT (skip, desc unchanged): {entity_a_id} vs {entity_b_id}"
+                )
+                continue
+            else:
+                # Case 2b: Descriptions changed - need to re-evaluate
+                should_evaluate = True
+                cache_reason = "desc_changed"
+        else:
+            # Case 3: Never compared before - need to evaluate
+            should_evaluate = True
+            cache_reason = "new_pair"
+            logger.debug(f"New pair (not in cache): {entity_a_id} vs {entity_b_id}")
+
+        # If we reach here, we need LLM evaluation
+        if not should_evaluate:
             continue
 
         # Schedule new LLM evaluation with concurrency control
