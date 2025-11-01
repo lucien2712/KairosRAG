@@ -52,7 +52,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
                     # New format - check if key is entity-based or hash-based
                     entity_a_id = value["entity_a_id"]
                     entity_b_id = value["entity_b_id"]
-                    entity_pair_id = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
+                    entity_pair_id = f"{min(entity_a_id, entity_b_id)}||{max(entity_a_id, entity_b_id)}"
 
                     if key == entity_pair_id:
                         # Already in new format
@@ -622,7 +622,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         hash_b_final = hashlib.md5(content_b_final.encode("utf-8")).hexdigest()
 
         # Create entity pair ID (based on entity IDs, not description hashes)
-        entity_pair_id_final = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
+        entity_pair_id_final = f"{min(entity_a_id, entity_b_id)}||{max(entity_a_id, entity_b_id)}"
 
         entity_pair_cache[entity_pair_id_final] = {
             "hash_a": hash_a_final,
@@ -676,7 +676,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         # Create entity pair ID (based on entity IDs, not descriptions)
         entity_a_id = entity_a['entity_id']
         entity_b_id = entity_b['entity_id']
-        entity_pair_id = f"{min(entity_a_id, entity_b_id)}_{max(entity_a_id, entity_b_id)}"
+        entity_pair_id = f"{min(entity_a_id, entity_b_id)}||{max(entity_a_id, entity_b_id)}"
 
         # Check cache with new logic
         should_evaluate = False  # Default: do not evaluate
