@@ -8,6 +8,7 @@ import hashlib
 from typing import Any
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
+from tqdm.asyncio import tqdm as atqdm
 from .utils import logger
 from .prompt import PROMPTS
 
@@ -523,7 +524,22 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         # Update statistics for LLM evaluations (count once per final evaluation)
         llm_evaluated_pairs += 1
 
-    for i, j, similarity in candidate_pairs:
+    # Process all candidate pairs with progress bar
+    pbar = atqdm(
+        candidate_pairs,
+        desc="Processing candidate pairs",
+        total=len(candidate_pairs),
+        unit="pair"
+    )
+
+    for i, j, similarity in pbar:
+        # Update progress bar with current statistics
+        pbar.set_postfix({
+            'merged': merged_pairs,
+            'cached': cached_merges,
+            'llm_eval': llm_evaluated_pairs
+        })
+
         # Skip if either entity has already been merged
         if i not in active_entities or j not in active_entities:
             continue
@@ -615,9 +631,25 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         if len(pending_tasks) >= llm_concurrency_limit:
             await process_next_pending_task()
 
-    # Process remaining pending evaluations
-    while pending_tasks:
-        await process_next_pending_task()
+    # Close the main progress bar
+    pbar.close()
+
+    # Process remaining pending evaluations with progress bar
+    if pending_tasks:
+        print(f"\nProcessing {len(pending_tasks)} remaining LLM evaluations...")
+        pbar_remaining = atqdm(
+            total=len(pending_tasks),
+            desc="Finalizing evaluations",
+            unit="task"
+        )
+        while pending_tasks:
+            await process_next_pending_task()
+            pbar_remaining.update(1)
+            pbar_remaining.set_postfix({
+                'merged': merged_pairs,
+                'remaining': len(pending_tasks)
+            })
+        pbar_remaining.close()
 
     processing_time = time_module.time() - start_time
     remaining_entities = len(active_entities)
