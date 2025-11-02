@@ -4002,6 +4002,25 @@ async def extract_keywords_only(
             if isinstance(keywords_data, dict):
                 hl_keywords = keywords_data.get("high_level_keywords", [])
                 ll_keywords = keywords_data.get("low_level_keywords", [])
+
+                # Validate that keywords are flat lists of strings (no nested lists)
+                def is_valid_keyword_list(keywords: list) -> bool:
+                    """Check if all elements in list are strings (no nested lists)."""
+                    if not isinstance(keywords, list):
+                        return False
+                    return all(isinstance(item, str) for item in keywords)
+
+                # Check if both keyword lists are valid
+                hl_valid = is_valid_keyword_list(hl_keywords) if hl_keywords else True
+                ll_valid = is_valid_keyword_list(ll_keywords) if ll_keywords else True
+
+                if not hl_valid or not ll_valid:
+                    logger.warning(
+                        f"Attempt {attempt + 1}/{max_retries}: Keywords contain nested lists or non-string items. "
+                        f"HL valid: {hl_valid}, LL valid: {ll_valid}. Retrying..."
+                    )
+                    continue
+
                 if hl_keywords or ll_keywords:
                     logger.info(f"Successfully extracted keywords on attempt {attempt + 1}")
                     break
