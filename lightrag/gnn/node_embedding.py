@@ -76,8 +76,8 @@ class NodeEmbeddingConfig:
 
     # Personalized PageRank parameters (used at query time)
     pagerank_alpha: float = 0.85  # Damping parameter
-    pagerank_max_iter: int = 100
-    pagerank_tol: float = 1e-06
+    pagerank_max_iter: int = 1000
+    pagerank_tol: float = 1e-03
 
 
 class NodeEmbeddingEnhancer:
