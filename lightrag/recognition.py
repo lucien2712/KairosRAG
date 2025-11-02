@@ -148,6 +148,32 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
             result = extract_json_from_response(response_text)
 
             if result is not None and isinstance(result, dict):
+                # Validate that ID lists contain only strings (no nested lists)
+                def is_valid_id_list(ids: list) -> bool:
+                    """Check if all elements in list are strings (no nested lists)."""
+                    if not isinstance(ids, list):
+                        return False
+                    return all(isinstance(item, str) for item in ids)
+
+                # Check both ID lists
+                entity_ids = result.get("irrelevant_entity_ids", [])
+                relation_ids = result.get("irrelevant_relation_ids", [])
+
+                entity_ids_valid = is_valid_id_list(entity_ids) if entity_ids else True
+                relation_ids_valid = is_valid_id_list(relation_ids) if relation_ids else True
+
+                if not entity_ids_valid or not relation_ids_valid:
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"ID lists contain nested lists or non-string items. "
+                            f"Entity IDs valid: {entity_ids_valid}, Relation IDs valid: {relation_ids_valid}. "
+                            f"Retrying ({attempt + 1}/{max_retries})..."
+                        )
+                        continue
+                    else:
+                        logger.error(f"ID lists still invalid after {max_retries + 1} attempts")
+                        return None
+
                 return result
             else:
                 if attempt < max_retries:
