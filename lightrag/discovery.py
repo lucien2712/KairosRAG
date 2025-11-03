@@ -278,7 +278,8 @@ async def process_file_with_llm(
     tokenizer,
     _extract_json_callback,
     _process_large_file_callback,
-    openai_client=None  # 新增參數：共用的 OpenAI client
+    openai_client=None,  # 新增參數：共用的 OpenAI client
+    token_tracker=None  # 新增參數：token tracker
 ) -> list:
     """Process a file with LLM to suggest new entity types.
 
@@ -328,6 +329,15 @@ async def process_file_with_llm(
                 ],
             )
 
+            # Track token usage if token_tracker is provided
+            if token_tracker and hasattr(response, 'usage') and response.usage:
+                token_counts = {
+                    'prompt_tokens': getattr(response.usage, 'prompt_tokens', 0),
+                    'completion_tokens': getattr(response.usage, 'completion_tokens', 0),
+                    'total_tokens': getattr(response.usage, 'total_tokens', 0),
+                }
+                token_tracker.add_usage(token_counts)
+
             llm_response = response.choices[0].message.content
             suggested_types = _extract_json_callback(llm_response)
 
@@ -359,7 +369,8 @@ async def process_large_file_with_chunking(
     tool_llm_model_name: str,
     tokenizer,
     _extract_json_callback,
-    openai_client=None  # 新增參數：共用的 OpenAI client
+    openai_client=None,  # 新增參數：共用的 OpenAI client
+    token_tracker=None  # 新增參數：token tracker
 ) -> list:
     """Process a large file by splitting into chunks.
 
@@ -423,6 +434,15 @@ async def process_large_file_with_chunking(
                 ],
             )
 
+            # Track token usage if token_tracker is provided
+            if token_tracker and hasattr(response, 'usage') and response.usage:
+                token_counts = {
+                    'prompt_tokens': getattr(response.usage, 'prompt_tokens', 0),
+                    'completion_tokens': getattr(response.usage, 'completion_tokens', 0),
+                    'total_tokens': getattr(response.usage, 'total_tokens', 0),
+                }
+                token_tracker.add_usage(token_counts)
+
             llm_response = response.choices[0].message.content
             suggested_types = _extract_json_callback(llm_response)
 
@@ -450,7 +470,7 @@ async def process_large_file_with_chunking(
     return deduplicated_types
 
 
-async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback, openai_client=None) -> list:
+async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback, openai_client=None, token_tracker=None) -> list:
     """Use LLM to remove duplicates and refine entity types with retry mechanism."""
     max_retries = 3
     # 使用傳入的 client，或 fallback 到建立新的
@@ -477,6 +497,15 @@ async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _ext
                     },
                 ],
             )
+
+            # Track token usage if token_tracker is provided
+            if token_tracker and hasattr(response, 'usage') and response.usage:
+                token_counts = {
+                    'prompt_tokens': getattr(response.usage, 'prompt_tokens', 0),
+                    'completion_tokens': getattr(response.usage, 'completion_tokens', 0),
+                    'total_tokens': getattr(response.usage, 'total_tokens', 0),
+                }
+                token_tracker.add_usage(token_counts)
 
             response_content = response.choices[0].message.content
             refined_entity_types = _extract_json_callback(response_content)
@@ -576,7 +605,8 @@ async def entity_type_discovery(
     rag_instance,
     input_folder: str = None,
     texts: Union[str, list[str]] = None,
-    force_refresh: bool = False
+    force_refresh: bool = False,
+    token_tracker=None
 ) -> dict:
     """Asynchronously augment entity types by analyzing documents.
 
@@ -643,7 +673,8 @@ async def entity_type_discovery(
                 rag_instance.tool_llm_model_name,
                 rag_instance.tokenizer,
                 _extract_json_callback,
-                rag_instance.openai_client  # 傳入共用的 OpenAI client
+                rag_instance.openai_client,  # 傳入共用的 OpenAI client
+                token_tracker  # 傳入 token tracker
             )
 
         async def process_file_with_limit(file_name: str, text_content: str, entity_types: list):
@@ -656,7 +687,8 @@ async def entity_type_discovery(
                     rag_instance.tokenizer,
                     _extract_json_callback,
                     _process_large_file_callback,
-                    rag_instance.openai_client  # 傳入共用的 OpenAI client
+                    rag_instance.openai_client,  # 傳入共用的 OpenAI client
+                    token_tracker  # 傳入 token tracker
                 )
 
         # Process files in batches of REFINE_INTERVAL
@@ -699,7 +731,8 @@ async def entity_type_discovery(
                     combined_entity_types,
                     rag_instance.tool_llm_model_name,
                     _extract_json_callback,
-                    rag_instance.openai_client  # 傳入共用的 OpenAI client
+                    rag_instance.openai_client,  # 傳入共用的 OpenAI client
+                    token_tracker  # 傳入 token tracker
                 )
 
                 # Update current_entity_types for next batch

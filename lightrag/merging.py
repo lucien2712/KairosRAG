@@ -13,7 +13,7 @@ from .utils import logger
 from .prompt import PROMPTS
 
 
-async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, langchain_client=None) -> dict:
+async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, langchain_client=None, token_tracker=None) -> dict:
     """
     Asynchronously perform intelligent entity merging using vector similarity and LLM decision making.
 
@@ -21,6 +21,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         rag_instance: LightRAG instance containing all necessary components
         threshold: Cosine similarity threshold for candidate pair filtering (default: 0.8)
         langchain_client: Optional shared LangChain ChatOpenAI client (if None, creates new one)
+        token_tracker: Optional TokenTracker instance for tracking token usage
 
     Returns:
         dict: Statistics about the merging process
@@ -74,16 +75,45 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             print(f"Failed to load entity pair cache: {e}")
             entity_pair_cache = {}
 
+    # Create LangChain callback for token tracking
+    from langchain.callbacks.base import BaseCallbackHandler
+
+    class TokenTrackingCallback(BaseCallbackHandler):
+        """Callback to track token usage from LangChain LLM calls"""
+        def __init__(self, token_tracker):
+            self.token_tracker = token_tracker
+
+        def on_llm_end(self, response, **kwargs):
+            """Called when LLM finishes"""
+            if self.token_tracker and hasattr(response, 'llm_output'):
+                llm_output = response.llm_output
+                if llm_output and 'token_usage' in llm_output:
+                    usage = llm_output['token_usage']
+                    token_counts = {
+                        'prompt_tokens': usage.get('prompt_tokens', 0),
+                        'completion_tokens': usage.get('completion_tokens', 0),
+                        'total_tokens': usage.get('total_tokens', 0),
+                    }
+                    self.token_tracker.add_usage(token_counts)
+
+    # Initialize callback
+    callbacks = []
+    if token_tracker:
+        callbacks = [TokenTrackingCallback(token_tracker)]
+
     # Initialize LLM using rag_instance.tool_llm_model_name or use shared client
     if langchain_client is None:
         llm = ChatOpenAI(
             model=rag_instance.tool_llm_model_name,
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+            callbacks=callbacks  # Add callbacks
         )
         print(f"LLM initialized: {rag_instance.tool_llm_model_name}")
     else:
         llm = langchain_client
+        if callbacks:
+            llm.callbacks = callbacks
         print(f"Using shared LangChain client: {rag_instance.tool_llm_model_name}")
 
     # Build global_config for summarization
@@ -751,25 +781,23 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         if len(pending_tasks) >= llm_concurrency_limit:
             await process_next_pending_task()
 
-    # Close the main progress bar
-    pbar.close()
-
-    # Process remaining pending evaluations with progress bar
+    # Process remaining pending evaluations (continue using main progress bar)
     if pending_tasks:
-        print(f"\nProcessing {len(pending_tasks)} remaining LLM evaluations...")
-        pbar_remaining = atqdm(
-            total=len(pending_tasks),
-            desc="Finalizing evaluations",
-            unit="task"
-        )
+        # Update progress bar description to indicate finalizing phase
+        pbar.set_description(f"Processing pairs (finalizing {len(pending_tasks)} evals)")
+
         while pending_tasks:
             await process_next_pending_task()
-            pbar_remaining.update(1)
-            pbar_remaining.set_postfix({
+            # Continue updating main progress bar with current statistics
+            pbar.set_postfix({
                 'merged': merged_pairs,
-                'remaining': len(pending_tasks)
+                'cached': cached_merges,
+                'llm_eval': llm_evaluated_pairs,  # Will increase from initial value to final count
+                'remaining': len(pending_tasks)   # Will decrease to 0
             })
-        pbar_remaining.close()
+
+    # Close the main progress bar only after ALL tasks are done
+    pbar.close()
 
     # Apply cached merges in batch (after all LLM evaluations complete)
     if cached_pairs_to_apply:

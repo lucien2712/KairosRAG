@@ -99,3 +99,5 @@ pipeline.txt
 *.png
 *.txt
 index_mistral.py
+query_trace_token.py
+index_trace_token.py

@@ -3110,13 +3110,16 @@ class LightRAG:
         total_entities_summarized = 0
         total_relations_summarized = 0
 
+        # Get token_tracker if available
+        token_tracker = getattr(self, 'token_tracker', None)
+
         for iteration in range(max_iterations):
             print(f"\n{'='*70}")
             print(f"  Agentic Merging: Iteration {iteration + 1}/{max_iterations}")
             print(f"{'='*70}")
 
             # Execute single pass merge
-            result = await single_pass_agentic_merging(self, threshold, self.langchain_chat_client)
+            result = await single_pass_agentic_merging(self, threshold, self.langchain_chat_client, token_tracker)
 
             # Record results
             all_iterations.append(result)
@@ -3330,10 +3333,14 @@ class LightRAG:
         """
         from .discovery import entity_type_discovery
 
+        # Get token_tracker if available
+        token_tracker = getattr(self, 'token_tracker', None)
+
         return await entity_type_discovery(
             rag_instance=self,
             input_folder=input_folder,
             texts=texts,
-            force_refresh=force_refresh
+            force_refresh=force_refresh,
+            token_tracker=token_tracker
         )
 

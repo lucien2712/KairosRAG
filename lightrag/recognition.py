@@ -155,11 +155,6 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
                     'total_tokens': getattr(response.usage, 'total_tokens', 0),
                 }
                 token_tracker.add_usage(token_counts)
-                print(f"[Recognition LLM] Prompt: {token_counts['prompt_tokens']}, "
-                      f"Completion: {token_counts['completion_tokens']}, "
-                      f"Total: {token_counts['total_tokens']}")
-            elif token_tracker:
-                print(f"[Recognition Warning] Token tracker provided but no usage data in response")
 
             # 提取 JSON
             result = extract_json_from_response(response_text)
