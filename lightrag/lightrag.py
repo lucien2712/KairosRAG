@@ -2256,6 +2256,10 @@ class LightRAG:
         if self.enable_node_embedding and hasattr(self, 'node_embedding'):
             global_config["node_embedding"] = self.node_embedding
 
+        # Add token_tracker if it exists (for token usage tracking)
+        if hasattr(self, 'token_tracker'):
+            global_config["token_tracker"] = self.token_tracker
+
         if param.mode in ["local", "global", "hybrid", "mix"]:
             response, context = await kg_query(
                 query.strip(),

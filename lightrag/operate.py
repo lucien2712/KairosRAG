@@ -1210,6 +1210,7 @@ async def _process_extraction_result(
         if entity_data == "MALFORMED_ENTITY":
             # Silently collect malformed entity record for retry
             malformed_records.append(record)
+            logger.debug(f"[DIAG] Collected malformed entity record in {chunk_key}: {record[:80]}...")
             continue
         elif entity_data is not None:
             maybe_nodes[entity_data["entity_name"]].append(entity_data)
@@ -1222,6 +1223,7 @@ async def _process_extraction_result(
         if relationship_data == "MALFORMED_RELATIONSHIP":
             # Silently collect malformed relationship record for retry
             malformed_records.append(record)
+            logger.debug(f"[DIAG] Collected malformed relationship record in {chunk_key}: {record[:80]}...")
             continue
         elif relationship_data is not None:
             maybe_edges[
@@ -1229,9 +1231,14 @@ async def _process_extraction_result(
             ].append(relationship_data)
 
     # If we have malformed records and this is not already a retry, store them for retry
+    logger.debug(
+        f"[DIAG] Before return in {chunk_key}: malformed_records={len(malformed_records)}, "
+        f"is_retry={is_retry}, will_store={malformed_records and not is_retry}"
+    )
     if malformed_records and not is_retry:
         # Store malformed records in a way that can be accessed for retry
         maybe_nodes["__MALFORMED_RECORDS__"] = malformed_records
+        logger.debug(f"[DIAG] Stored {len(malformed_records)} malformed records in __MALFORMED_RECORDS__")
 
     return dict(maybe_nodes), dict(maybe_edges)
 
@@ -2417,7 +2424,9 @@ async def extract_entities(
         )
 
         # Check for malformed records and retry if needed
+        logger.debug(f"[DIAG] maybe_nodes keys before pop in {chunk_key}: {list(maybe_nodes.keys())}")
         malformed_records = maybe_nodes.pop("__MALFORMED_RECORDS__", [])
+        logger.debug(f"[DIAG] Popped malformed_records count in {chunk_key}: {len(malformed_records)}")
         if malformed_records:
             logger.info(f"Retrying {len(malformed_records)} malformed records in {chunk_key}")
             retry_nodes, retry_edges = await _retry_malformed_extraction(
@@ -4893,6 +4902,8 @@ async def _build_query_context(
             tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
             # Get openai_client from global_config (set by LightRAG instance)
             openai_client = global_config.get("openai_client", None)
+            # Get token_tracker from global_config
+            token_tracker = global_config.get("token_tracker", None)
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -4901,6 +4912,7 @@ async def _build_query_context(
                 tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
                 openai_client=openai_client,  # 傳入共用的 OpenAI client
+                token_tracker=token_tracker,  # 傳入 token tracker
             )
 
             # Rebuild context with filtered data
@@ -5527,6 +5539,8 @@ Knowledge Graph Data (Relationship):
             tool_llm_model_name = global_config.get("tool_llm_model_name", "gpt-4o-mini")
             # Get openai_client from global_config (set by LightRAG instance)
             openai_client = global_config.get("openai_client", None)
+            # Get token_tracker from global_config
+            token_tracker = global_config.get("token_tracker", None)
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -5535,6 +5549,7 @@ Knowledge Graph Data (Relationship):
                 tool_llm_model_name=tool_llm_model_name,
                 global_config=global_config,
                 openai_client=openai_client,  # 傳入共用的 OpenAI client
+                token_tracker=token_tracker,  # 傳入 token tracker
             )
 
             # Rebuild context with filtered data
