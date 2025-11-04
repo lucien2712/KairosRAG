@@ -546,10 +546,13 @@ A.entity_id = Apple
 A.description = A technology company known for designing and manufacturing consumer electronics, software, and services.
 
 B.entity_id = TSMC
-B.description = Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry."""
+B.description = Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry.
 
-PROMPTS["entity_merge_user"] = """Determine whether the two entities are the same. Only when you are over 95% confident that A and B refer to the SAME entity, invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)`. If you are not 95% confident, reply exactly with `NO_MERGE`.
+Response: NO_MERGE"""
 
+PROMPTS["entity_merge_user"] = """Determine whether the two entities are the same. Only when you are over 95% confident that A and B refer to the SAME entity, invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)` using the EXACT entity_id values below (preserve all special characters). If you are not 95% confident, reply exactly with `NO_MERGE`.
+
+IMPORTANT: Use these EXACT entity_id strings in the tool call (do not modify them):
 A.entity_id = {a_entity_id}
 A.description = {a_description}
 
@@ -557,7 +560,6 @@ B.entity_id = {b_entity_id}
 B.description = {b_description}
 """
 
-# Entity Type Augmentation Prompts
 PROMPTS["entity_type_suggestion_system"] = """
 You are an expert in Named Entity Recognition (NER) with expertise across multiple domains. Your goal is to analyze the connections and relations between existing entity types and document content to provide meaningful refinements or additions that enhance entity extraction for various document types.
 
