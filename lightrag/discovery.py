@@ -312,9 +312,10 @@ async def process_file_with_llm(
 
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=tool_llm_model_name,
-                messages=[
+            # Prepare API call parameters
+            api_params = {
+                "model": tool_llm_model_name,
+                "messages": [
                     {
                         "role": "system",
                         "content": PROMPTS["entity_type_suggestion_system"],
@@ -327,7 +328,13 @@ async def process_file_with_llm(
                         ),
                     },
                 ],
-            )
+            }
+
+            # Add reasoning_effort for GPT-5 series models
+            if tool_llm_model_name.startswith("gpt-5"):
+                api_params["reasoning_effort"] = "minimal"
+
+            response = client.chat.completions.create(**api_params)
 
             # Track token usage if token_tracker is provided
             if token_tracker and hasattr(response, 'usage') and response.usage:
@@ -417,9 +424,10 @@ async def process_large_file_with_chunking(
         logger.info(f"Processing chunk {chunk_idx}/{len(chunks)}")
 
         try:
-            response = client.chat.completions.create(
-                model=tool_llm_model_name,
-                messages=[
+            # Prepare API call parameters
+            api_params = {
+                "model": tool_llm_model_name,
+                "messages": [
                     {
                         "role": "system",
                         "content": PROMPTS["entity_type_suggestion_system"],
@@ -432,7 +440,13 @@ async def process_large_file_with_chunking(
                         ),
                     },
                 ],
-            )
+            }
+
+            # Add reasoning_effort for GPT-5 series models
+            if tool_llm_model_name.startswith("gpt-5"):
+                api_params["reasoning_effort"] = "minimal"
+
+            response = client.chat.completions.create(**api_params)
 
             # Track token usage if token_tracker is provided
             if token_tracker and hasattr(response, 'usage') and response.usage:
@@ -482,9 +496,10 @@ async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _ext
 
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=tool_llm_model_name,
-                messages=[
+            # Prepare API call parameters
+            api_params = {
+                "model": tool_llm_model_name,
+                "messages": [
                     {
                         "role": "system",
                         "content": PROMPTS["entity_type_refinement_system"],
@@ -496,7 +511,13 @@ async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _ext
                         ),
                     },
                 ],
-            )
+            }
+
+            # Add reasoning_effort for GPT-5 series models
+            if tool_llm_model_name.startswith("gpt-5"):
+                api_params["reasoning_effort"] = "minimal"
+
+            response = client.chat.completions.create(**api_params)
 
             # Track token usage if token_tracker is provided
             if token_tracker and hasattr(response, 'usage') and response.usage:

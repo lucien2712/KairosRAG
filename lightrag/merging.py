@@ -103,12 +103,18 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
 
     # Initialize LLM using rag_instance.tool_llm_model_name or use shared client
     if langchain_client is None:
-        llm = ChatOpenAI(
-            model=rag_instance.tool_llm_model_name,
-            api_key=os.getenv("OPENAI_API_KEY"),
-            base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
-            callbacks=callbacks  # Add callbacks
-        )
+        llm_params = {
+            "model": rag_instance.tool_llm_model_name,
+            "api_key": os.getenv("OPENAI_API_KEY"),
+            "base_url": os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1"),
+            "callbacks": callbacks  # Add callbacks
+        }
+
+        # Add reasoning_effort for GPT-5 series models
+        if rag_instance.tool_llm_model_name.startswith("gpt-5"):
+            llm_params["model_kwargs"] = {"reasoning_effort": "minimal"}
+
+        llm = ChatOpenAI(**llm_params)
         print(f"LLM initialized: {rag_instance.tool_llm_model_name}")
     else:
         llm = langchain_client
