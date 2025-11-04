@@ -514,19 +514,32 @@ Output:"""
 PROMPTS["entity_merge_system"] = """You are a deduplication evaluator. Given two entities (A, B) with (entity_id, description),
 you must carefully compare both entity_id and description.
 
+CRITICAL: When calling the merge tool, you MUST use the EXACT entity_id values provided, including ALL special characters (asterisks *, parentheses (), brackets [], quotes, etc.). Do NOT modify, simplify, or remove any characters from the entity_id.
+
 Only when you are OVER 95% confident that A and B refer to the SAME real-world entity,
-you should INVOKE the tool: merge(a_entity_id, b_entity_id).
+you should INVOKE the tool: merge(a_entity_id, b_entity_id) using the EXACT entity_id strings.
 
 If you are NOT over 95% confident (or they should not be merged), do NOT invoke any tool
 and simply reply with the single token: NO_MERGE."""
 
 PROMPTS["entity_merge_examples"] = """Example
-#### Merge ###
+#### Merge (exact entity_id match required) ###
 A.entity_id = Apple
 A.description = A technology company known for designing and manufacturing consumer electronics, software, and services.
 
 B.entity_id = Apple Inc.
 B.description = An American multinational technology company headquartered in Cupertino, California.
+
+Tool call: merge_entities_tool(a_entity_id="Apple", b_entity_id="Apple Inc.")
+
+#### Merge with special characters (preserve ALL characters) ###
+A.entity_id = *Dr. John Smith*
+A.description = A renowned scientist in quantum physics.
+
+B.entity_id = Dr. John Smith
+B.description = Physicist specializing in quantum mechanics.
+
+Tool call: merge_entities_tool(a_entity_id="*Dr. John Smith*", b_entity_id="Dr. John Smith")
 
 #### No merge ###
 A.entity_id = Apple
