@@ -132,16 +132,22 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
 
     for attempt in range(max_retries + 1):
         try:
+            # Prepare API call parameters
+            api_params = {
+                "model": tool_llm_model_name,
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+            }
+
+            # Add reasoning_effort for GPT-5 series models
+            if tool_llm_model_name.startswith("gpt-5"):
+                api_params["reasoning_effort"] = "minimal"
+
             # Add timeout protection to prevent indefinite waiting
             response = await asyncio.wait_for(
                 asyncio.to_thread(
-                    lambda: client.chat.completions.create(
-                        model=tool_llm_model_name,
-                        messages=[
-                            {"role": "user", "content": prompt}
-                        ],
-                        temperature=0.0,
-                    )
+                    lambda: client.chat.completions.create(**api_params)
                 ),
                 timeout=180.0  # 3 minutes timeout
             )
