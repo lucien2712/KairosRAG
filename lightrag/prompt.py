@@ -541,16 +541,31 @@ B.description = Physicist specializing in quantum mechanics.
 
 Tool call: merge_entities_tool(a_entity_id="*Dr. John Smith*", b_entity_id="Dr. John Smith")
 
-#### No merge ###
+#### No merge - Obviously different entities ###
 A.entity_id = Apple
 A.description = A technology company known for designing and manufacturing consumer electronics, software, and services.
 
 B.entity_id = TSMC
 B.description = Taiwan Semiconductor Manufacturing Company, the world's largest semiconductor foundry.
 
-Response: NO_MERGE"""
+Response: NO_MERGE
 
-PROMPTS["entity_merge_user"] = """Determine whether the two entities are the same. Only when you are over 95% confident that A and B refer to the SAME entity, invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)` using the EXACT entity_id values below (preserve all special characters). If you are not 95% confident, reply exactly with `NO_MERGE`.
+#### No merge - Similar descriptions but different proper nouns ###
+A.entity_id = Microsoft Azure
+A.description = Cloud computing platform offering infrastructure, software services, and AI capabilities to enterprise customers.
+
+B.entity_id = Amazon Web Services
+B.description = Cloud computing platform providing infrastructure, software services, and machine learning tools for businesses.
+
+Response: NO_MERGE
+Reasoning: Despite highly similar descriptions (both are cloud platforms), the entity_id clearly indicates different companies."""
+
+PROMPTS["entity_merge_user"] = """Determine whether the two entities are the same. Only when you are over 95% confident that A and B refer to the SAME real-world entity, invoke the tool `merge_entities_tool(a_entity_id, b_entity_id)` using the EXACT entity_id values below (preserve all special characters). If you are not 95% confident, reply exactly with `NO_MERGE`.
+
+CRITICAL DECISION CRITERIA:
+1. **Proper Noun Analysis**: Different proper nouns (company names, person names, product names) usually indicate different entities, even if descriptions are similar
+2. **Similar Business Descriptions**: Similar industry descriptions do NOT justify merging when entity_id clearly differs (e.g., different cloud service providers)
+3. **When in Doubt**: If entity_id suggests different entities despite description overlap, default to NO_MERGE
 
 IMPORTANT: Use these EXACT entity_id strings in the tool call (do not modify them):
 A.entity_id = {a_entity_id}
