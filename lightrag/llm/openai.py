@@ -451,26 +451,6 @@ async def gpt_5_complete(
         **kwargs,
     )
 
-async def gpt_5_mini_complete(
-    prompt,
-    system_prompt=None,
-    history_messages=None,
-    keyword_extraction=False,
-    **kwargs,
-) -> str:
-    if history_messages is None:
-        history_messages = []
-    keyword_extraction = kwargs.pop("keyword_extraction", None)
-    if keyword_extraction:
-        kwargs["response_format"] = GPTKeywordExtractionFormat
-    return await openai_complete_if_cache(
-        "gpt-5-mini",
-        prompt,
-        system_prompt=system_prompt,
-        history_messages=history_messages,
-        **kwargs,
-    )
-
 async def nvidia_openai_complete(
     prompt,
     system_prompt=None,

@@ -279,7 +279,8 @@ async def process_file_with_llm(
     _extract_json_callback,
     _process_large_file_callback,
     openai_client=None,  # 新增參數：共用的 OpenAI client
-    token_tracker=None  # 新增參數：token tracker
+    token_tracker=None,  # 新增參數：token tracker
+    tool_llm_model_kwargs: dict = None  # 新增參數：tool LLM kwargs
 ) -> list:
     """Process a file with LLM to suggest new entity types.
 
@@ -310,6 +311,9 @@ async def process_file_with_llm(
         [et["entity_type"] for et in current_entity_types]
     )
 
+    if tool_llm_model_kwargs is None:
+        tool_llm_model_kwargs = {}
+
     for attempt in range(max_retries):
         try:
             # Prepare API call parameters
@@ -328,11 +332,8 @@ async def process_file_with_llm(
                         ),
                     },
                 ],
+                **tool_llm_model_kwargs  # Merge additional kwargs
             }
-
-            # Add reasoning_effort for GPT-5 series models
-            if tool_llm_model_name.startswith("gpt-5"):
-                api_params["reasoning_effort"] = "minimal"
 
             response = client.chat.completions.create(**api_params)
 
@@ -377,7 +378,8 @@ async def process_large_file_with_chunking(
     tokenizer,
     _extract_json_callback,
     openai_client=None,  # 新增參數：共用的 OpenAI client
-    token_tracker=None  # 新增參數：token tracker
+    token_tracker=None,  # 新增參數：token tracker
+    tool_llm_model_kwargs: dict = None  # 新增參數：tool LLM kwargs
 ) -> list:
     """Process a large file by splitting into chunks.
 
@@ -419,6 +421,9 @@ async def process_large_file_with_chunking(
         [et["entity_type"] for et in current_entity_types]
     )
 
+    if tool_llm_model_kwargs is None:
+        tool_llm_model_kwargs = {}
+
     for chunk_idx, chunk_data in enumerate(chunks, 1):
         chunk_content = chunk_data["content"]
         logger.info(f"Processing chunk {chunk_idx}/{len(chunks)}")
@@ -440,11 +445,8 @@ async def process_large_file_with_chunking(
                         ),
                     },
                 ],
+                **tool_llm_model_kwargs  # Merge additional kwargs
             }
-
-            # Add reasoning_effort for GPT-5 series models
-            if tool_llm_model_name.startswith("gpt-5"):
-                api_params["reasoning_effort"] = "minimal"
 
             response = client.chat.completions.create(**api_params)
 
@@ -484,7 +486,7 @@ async def process_large_file_with_chunking(
     return deduplicated_types
 
 
-async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback, openai_client=None, token_tracker=None) -> list:
+async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _extract_json_callback, openai_client=None, token_tracker=None, tool_llm_model_kwargs: dict = None) -> list:
     """Use LLM to remove duplicates and refine entity types with retry mechanism."""
     max_retries = 3
     # 使用傳入的 client，或 fallback 到建立新的
@@ -493,6 +495,9 @@ async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _ext
     else:
         client = openai_client
     entity_types_json = json.dumps(entity_types, ensure_ascii=False, indent=2)
+
+    if tool_llm_model_kwargs is None:
+        tool_llm_model_kwargs = {}
 
     for attempt in range(max_retries):
         try:
@@ -511,11 +516,8 @@ async def refine_entity_types(entity_types: list, tool_llm_model_name: str, _ext
                         ),
                     },
                 ],
+                **tool_llm_model_kwargs  # Merge additional kwargs
             }
-
-            # Add reasoning_effort for GPT-5 series models
-            if tool_llm_model_name.startswith("gpt-5"):
-                api_params["reasoning_effort"] = "minimal"
 
             response = client.chat.completions.create(**api_params)
 
@@ -627,7 +629,8 @@ async def entity_type_discovery(
     input_folder: str = None,
     texts: Union[str, list[str]] = None,
     force_refresh: bool = False,
-    token_tracker=None
+    token_tracker=None,
+    tool_llm_model_kwargs: dict = None
 ) -> dict:
     """Asynchronously augment entity types by analyzing documents.
 
@@ -695,7 +698,8 @@ async def entity_type_discovery(
                 rag_instance.tokenizer,
                 _extract_json_callback,
                 rag_instance.openai_client,  # 傳入共用的 OpenAI client
-                token_tracker  # 傳入 token tracker
+                token_tracker,  # 傳入 token tracker
+                tool_llm_model_kwargs  # 傳入 tool LLM kwargs
             )
 
         async def process_file_with_limit(file_name: str, text_content: str, entity_types: list):
@@ -709,7 +713,8 @@ async def entity_type_discovery(
                     _extract_json_callback,
                     _process_large_file_callback,
                     rag_instance.openai_client,  # 傳入共用的 OpenAI client
-                    token_tracker  # 傳入 token tracker
+                    token_tracker,  # 傳入 token tracker
+                    tool_llm_model_kwargs  # 傳入 tool LLM kwargs
                 )
 
         # Process files in batches of REFINE_INTERVAL
@@ -753,7 +758,8 @@ async def entity_type_discovery(
                     rag_instance.tool_llm_model_name,
                     _extract_json_callback,
                     rag_instance.openai_client,  # 傳入共用的 OpenAI client
-                    token_tracker  # 傳入 token tracker
+                    token_tracker,  # 傳入 token tracker
+                    tool_llm_model_kwargs  # 傳入 tool LLM kwargs
                 )
 
                 # Update current_entity_types for next batch

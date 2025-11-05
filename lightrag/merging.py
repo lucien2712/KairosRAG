@@ -13,7 +13,7 @@ from .utils import logger
 from .prompt import PROMPTS
 
 
-async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, langchain_client=None, token_tracker=None) -> dict:
+async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, langchain_client=None, token_tracker=None, tool_llm_model_kwargs: dict = None) -> dict:
     """
     Asynchronously perform intelligent entity merging using vector similarity and LLM decision making.
 
@@ -110,9 +110,9 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             "callbacks": callbacks  # Add callbacks
         }
 
-        # Add reasoning_effort for GPT-5 series models
-        if rag_instance.tool_llm_model_name.startswith("gpt-5"):
-            llm_params["model_kwargs"] = {"reasoning_effort": "minimal"}
+        # Add tool_llm_model_kwargs if provided (e.g., {"reasoning_effort": "minimal"} for GPT-5)
+        if tool_llm_model_kwargs:
+            llm_params["model_kwargs"] = tool_llm_model_kwargs
 
         llm = ChatOpenAI(**llm_params)
         print(f"LLM initialized: {rag_instance.tool_llm_model_name}")

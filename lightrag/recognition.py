@@ -78,6 +78,7 @@ async def recognition_memory_filter(
     global_config: dict = None,  # 新增參數：用於獲取 llm_model_max_async
     openai_client = None,  # 新增參數：共用的 OpenAI client（如果為 None 則建立新的）
     token_tracker = None,  # 新增參數：token tracker
+    tool_llm_model_kwargs: dict = None,  # 新增參數：tool LLM kwargs
 ) -> tuple[list[dict], list[dict]]:
     """
     使用 LLM 過濾 entities/relations（一起處理以保持上下文），完整保留原始數據
@@ -99,7 +100,7 @@ async def recognition_memory_filter(
 
     # 一起處理 entities 和 relations（而非並行分開處理）
     filtered_entities, filtered_relations = await _batch_recognize_combined(
-        query, entities, relations, batch_size, tool_llm_model_name, global_config, openai_client, token_tracker
+        query, entities, relations, batch_size, tool_llm_model_name, global_config, openai_client, token_tracker, tool_llm_model_kwargs
     )
 
     # 統計日誌
@@ -115,7 +116,7 @@ async def recognition_memory_filter(
     return filtered_entities, filtered_relations
 
 
-async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_llm_model_name: str = "gpt-4o-mini", token_tracker=None):
+async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_llm_model_name: str = "gpt-4o-mini", token_tracker=None, tool_llm_model_kwargs: dict = None):
     """
     調用 LLM 並在失敗時重試
 
@@ -125,10 +126,13 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
         max_retries: 最大重試次數
         tool_llm_model_name: 工具專用 LLM 模型名稱（僅支援 OpenAI-compatible API）
         token_tracker: Optional TokenTracker instance for tracking token usage
+        tool_llm_model_kwargs: Additional kwargs to pass to LLM API (e.g., {"reasoning_effort": "minimal"})
 
     Returns:
         提取的 JSON 結果，或 None（失敗）
     """
+    if tool_llm_model_kwargs is None:
+        tool_llm_model_kwargs = {}
 
     for attempt in range(max_retries + 1):
         try:
@@ -138,11 +142,8 @@ async def _call_llm_with_retry(client, prompt: str, max_retries: int = 2, tool_l
                 "messages": [
                     {"role": "user", "content": prompt}
                 ],
+                **tool_llm_model_kwargs  # Merge additional kwargs
             }
-
-            # Add reasoning_effort for GPT-5 series models
-            if tool_llm_model_name.startswith("gpt-5"):
-                api_params["reasoning_effort"] = "minimal"
 
             # Add timeout protection to prevent indefinite waiting
             response = await asyncio.wait_for(
@@ -223,6 +224,7 @@ async def _process_single_relation_batch(
     tool_llm_model_name: str,
     batch_index: int,
     token_tracker=None,
+    tool_llm_model_kwargs: dict = None,
 ) -> dict:
     """處理單個 relation batch 並返回結果"""
     relation_batch_ids = {rel_id: rel_data for rel_id, rel_data in relation_batch_items}
@@ -268,7 +270,7 @@ async def _process_single_relation_batch(
     )
 
     try:
-        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name, token_tracker=token_tracker)
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name, token_tracker=token_tracker, tool_llm_model_kwargs=tool_llm_model_kwargs)
 
         if result is None:
             logger.warning(f"Failed to get valid response for relation batch {batch_index} after retries, keeping all items")
@@ -308,6 +310,7 @@ async def _process_single_orphan_batch(
     tool_llm_model_name: str,
     batch_index: int,
     token_tracker=None,
+    tool_llm_model_kwargs: dict = None,
 ) -> list[dict]:
     """處理單個 orphan entity batch 並返回過濾後的 entities"""
     entities_data = [
@@ -325,7 +328,7 @@ async def _process_single_orphan_batch(
     )
 
     try:
-        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name, token_tracker=token_tracker)
+        result = await _call_llm_with_retry(client, prompt, max_retries=2, tool_llm_model_name=tool_llm_model_name, token_tracker=token_tracker, tool_llm_model_kwargs=tool_llm_model_kwargs)
 
         if result is None:
             logger.warning(f"Failed to get valid response for orphan batch {batch_index} after retries, keeping all items")
@@ -350,6 +353,7 @@ async def _batch_recognize_combined(
     global_config: dict = None,
     openai_client = None,  # 新增參數：共用的 OpenAI client
     token_tracker = None,  # 新增參數：token tracker
+    tool_llm_model_kwargs: dict = None,  # 新增參數：tool LLM kwargs
 ) -> tuple[list[dict], list[dict]]:
     """
     一起處理 entities 和 relations，讓 LLM 在評估 relations 時能看到 entity 資訊
@@ -391,7 +395,7 @@ async def _batch_recognize_combined(
     async def process_with_semaphore(batch_items, batch_idx):
         async with semaphore:
             return await _process_single_relation_batch(
-                query, batch_items, entity_map, client, tool_llm_model_name, batch_idx, token_tracker
+                query, batch_items, entity_map, client, tool_llm_model_name, batch_idx, token_tracker, tool_llm_model_kwargs
             )
 
     for i in range(0, len(relation_items), batch_size):
@@ -436,7 +440,7 @@ async def _batch_recognize_combined(
         async def process_orphan_with_semaphore(orphan_batch, batch_idx):
             async with semaphore:
                 return await _process_single_orphan_batch(
-                    query, orphan_batch, client, tool_llm_model_name, batch_idx, token_tracker
+                    query, orphan_batch, client, tool_llm_model_name, batch_idx, token_tracker, tool_llm_model_kwargs
                 )
 
         for i in range(0, len(orphan_entities), batch_size):

@@ -310,6 +310,10 @@ class LightRAG:
     """Name of the LLM model used for tool-based operations (agentic_merging, entity_type_discovery, recognition).
     Note: Only supports OpenAI-compatible APIs. For main query operations, use llm_model_func instead."""
 
+    tool_llm_model_kwargs: dict[str, Any] = field(default_factory=dict)
+    """Additional keyword arguments to pass to tool LLM API calls (e.g., {"reasoning_effort": "minimal"} for GPT-5 models).
+    These will be merged with API parameters in recognition, merging, and discovery operations."""
+
     summary_max_tokens: int = field(
         default=int(os.getenv("SUMMARY_MAX_TOKENS", DEFAULT_SUMMARY_MAX_TOKENS))
     )

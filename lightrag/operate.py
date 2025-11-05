@@ -4904,6 +4904,8 @@ async def _build_query_context(
             openai_client = global_config.get("openai_client", None)
             # Get token_tracker from global_config
             token_tracker = global_config.get("token_tracker", None)
+            # Get tool_llm_model_kwargs from global_config (set by LightRAG instance)
+            tool_llm_model_kwargs = global_config.get("tool_llm_model_kwargs", {})
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -4913,6 +4915,7 @@ async def _build_query_context(
                 global_config=global_config,
                 openai_client=openai_client,  # 傳入共用的 OpenAI client
                 token_tracker=token_tracker,  # 傳入 token tracker
+                tool_llm_model_kwargs=tool_llm_model_kwargs,  # 傳入 tool LLM kwargs
             )
 
             # Rebuild context with filtered data
@@ -5541,6 +5544,8 @@ Knowledge Graph Data (Relationship):
             openai_client = global_config.get("openai_client", None)
             # Get token_tracker from global_config
             token_tracker = global_config.get("token_tracker", None)
+            # Get tool_llm_model_kwargs from global_config (set by LightRAG instance)
+            tool_llm_model_kwargs = global_config.get("tool_llm_model_kwargs", {})
             filtered_entities, filtered_relations = await recognition_memory_filter(
                 query=query,
                 entities=entities_for_filtering,
@@ -5550,6 +5555,7 @@ Knowledge Graph Data (Relationship):
                 global_config=global_config,
                 openai_client=openai_client,  # 傳入共用的 OpenAI client
                 token_tracker=token_tracker,  # 傳入 token tracker
+                tool_llm_model_kwargs=tool_llm_model_kwargs,  # 傳入 tool LLM kwargs
             )
 
             # Rebuild context with filtered data
