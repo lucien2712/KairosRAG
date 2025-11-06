@@ -1,13 +1,10 @@
 import os
-from lightrag import LightRAG
-from lightrag.llm.openai import gpt_4o_mini_complete, gpt_4o_complete, openai_embed
-from lightrag.kg.shared_storage import initialize_pipeline_status
-from lightrag.utils import setup_logger, EmbeddingFunc
+from lightrag.utils import setup_logger
 
 import nest_asyncio
 nest_asyncio.apply()
 
-os.environ["OPENAI_API_KEY"] = ""
+os.environ["OPENAI_API_KEY"] = "Your-OpenAI-API-Key-Here"
 
 setup_logger("lightrag", level="INFO")
 
@@ -18,18 +15,5 @@ os.environ["WORKING_DIR"] = WORKING_DIR
 if not os.path.exists(WORKING_DIR):
     os.mkdir(WORKING_DIR)
 
-async def initialize_rag():
-    rag = LightRAG(
-        working_dir=WORKING_DIR,
-        embedding_func=openai_embed,
-        llm_model_func=gpt_4o_mini_complete,
-        chunk_token_size=600,
-        chunk_overlap_token_size=100,
-        enable_node_embedding=True,
-        enable_llm_cache= False
-    )
-    
-    # IMPORTANT: Both initialization calls are required!
-    await rag.initialize_storages()  # Initialize storage backends
-    await initialize_pipeline_status()  # Initialize processing pipeline
-    return rag
+
+

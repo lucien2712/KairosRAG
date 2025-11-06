@@ -125,6 +125,11 @@ def print_phase_statistics(phase_name: str, start_usage: dict, end_usage: dict):
     phase_completion = end_usage['completion_tokens'] - start_usage['completion_tokens']
     phase_total = end_usage['total_tokens'] - start_usage['total_tokens']
 
+    # 估算成本 (基於 GPT-4o-mini 價格: $0.15/1M input, $0.60/1M output)
+    input_cost = phase_prompt * 0.15 / 1_000_000
+    output_cost = phase_completion * 0.60 / 1_000_000
+    total_cost = input_cost + output_cost
+
     print(f"\n{'='*80}")
     print(f"{phase_name} - TOKEN USAGE STATISTICS")
     print(f"{'='*80}")
@@ -133,6 +138,11 @@ def print_phase_statistics(phase_name: str, start_usage: dict, end_usage: dict):
     print(f"✍️  Completion Tokens:    {phase_completion:,}")
     print(f"🔢 Total Tokens:         {phase_total:,}")
     print(f"{'-'*80}")
+    print(f"💰 Estimated Cost (GPT-4o-mini):")
+    print(f"   Input:  ${input_cost:.6f}")
+    print(f"   Output: ${output_cost:.6f}")
+    print(f"   Total:  ${total_cost:.6f}")
+    print(f"{'='*80}")
 
 
 async def main():

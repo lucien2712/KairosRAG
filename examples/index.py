@@ -3,9 +3,14 @@ import os
 import asyncio
 from pathlib import Path
 from typing import List, Tuple
-from config import initialize_rag
+from lightrag import  LightRAG
+from lightrag.llm.openai import gpt_4o_mini_complete, gpt_4o_complete, openai_embed,  gpt_5_mini_complete
+from lightrag.kg.shared_storage import initialize_pipeline_status
+from lightrag.utils import setup_logger, EmbeddingFunc
 import config
-
+import nest_asyncio
+nest_asyncio.apply()
+import time
 
 def extract_txt_text(path: Path) -> str:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -45,6 +50,26 @@ def process_files_to_list(folder_path: str) -> Tuple[List[str], List[str], List[
 
     return texts, file_names, fiscal_years
 
+async def initialize_rag():
+    rag =  LightRAG(
+        working_dir=os.environ["WORKING_DIR"],
+        embedding_func=openai_embed,
+        llm_model_func= gpt_5_mini_complete,
+        tool_llm_model_name= "gpt-5-mini",
+        tool_llm_model_kwargs={"reasoning_effort": "minimal"},
+        chunk_token_size=600,
+        chunk_overlap_token_size=100,
+        llm_model_max_async=32,
+        enable_node_embedding=True,
+        enable_llm_cache= False,
+        max_parallel_insert = 8
+    )
+    
+    # IMPORTANT: Both initialization calls are required!
+    await rag.initialize_storages()  # Initialize storage backends
+    await initialize_pipeline_status()  # Initialize processing pipeline
+    return rag
+
 
 async def main():
     rag = None
@@ -52,14 +77,17 @@ async def main():
         # 初始化 RAG
         rag = await initialize_rag()
         print("Initialization success")
-
+        
         # 讀取 PDF 並建立索引
         path = "./inputs"
-        result = rag.entity_type_aug(path)
+        rag.entity_type_aug(path)
         texts, file_paths, fiscal_years = process_files_to_list(path)
 
         if texts:
-            rag.insert(texts, file_paths=file_paths, timestamps=fiscal_years, agentic_merging=True, agentic_merging_threshold=0.8)
+            start = time.time()
+            rag.insert(texts, file_paths=file_paths, timestamps=fiscal_years, agentic_merging=True, agentic_merging_threshold=0.7)
+            end = time.time()
+            print(f"Graph building time: {end - start} seconds")
             print("Graph building success!")
         else:
             print("No valid PDF content found, graph not built.")
