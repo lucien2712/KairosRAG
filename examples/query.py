@@ -44,9 +44,7 @@ Apple 在這幾季的趨勢變化，有什麼值得可以注意的警訊?
 
         """
 
-        # 將時間相關模糊問題進行 rewrite
-        #rewritten_query = rewriter(query)
-        print("Rewrite query: ", query)
+        print("query: ", query)
 
         response,context = rag.query(
             query,
