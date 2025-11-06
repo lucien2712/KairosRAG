@@ -197,78 +197,6 @@ During Apple's Q3 2024 earnings call on July 31, 2024, CEO Tim Cook announced th
 (relationship{tuple_delimiter}Apple{tuple_delimiter}TSMC{tuple_delimiter}supplier relationship, supply chain challenges{tuple_delimiter}Apple faces supply chain challenges with key supplier TSMC, impacting the company's ability to meet product demand despite overall strong performance.){record_delimiter}
 (relationship{tuple_delimiter}Apple{tuple_delimiter}Greater China Revenue{tuple_delimiter}regional performance, market presence{tuple_delimiter}Apple maintained strong performance in Greater China with $14.7 billion in quarterly revenue, demonstrating resilience in a key market.){record_delimiter}
 {completion_delimiter}
-
-""",
-    """[Example 5]
-
----Input---
-Entity_types: [organization,financial_metric,account_item,currency,temporal_range]
-Text:
-```
-TechCorp Q3 2024 Revenue Summary
-Currency: USD thousands
-
-<table>
-<thead>
-<tr><th>Account</th><th>Q3 2024</th><th>Q2 2024</th></tr>
-</thead>
-<tbody>
-<tr><td>Product Sales</td><td>$1,200</td><td>$1,150</td></tr>
-<tr><td>Service Revenue</td><td>$800</td><td>$750</td></tr>
-<tr><td>Total Revenue</td><td>$2,000</td><td>$1,900</td></tr>
-</tbody>
-</table>
-```
-
----Output---
-(entity{tuple_delimiter}TechCorp{tuple_delimiter}organization{tuple_delimiter}TechCorp is a technology company reporting quarterly revenue growth from Q2 to Q3 2024.){record_delimiter}
-(entity{tuple_delimiter}Q3 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q3 2024 reporting period with total revenue of $2,000 thousand.){record_delimiter}
-(entity{tuple_delimiter}Q2 2024{tuple_delimiter}temporal_range{tuple_delimiter}Q2 2024 comparison period with total revenue of $1,900 thousand.){record_delimiter}
-(entity{tuple_delimiter}USD thousands{tuple_delimiter}currency{tuple_delimiter}USD thousands is the monetary unit for all revenue figures.){record_delimiter}
-(entity{tuple_delimiter}Product Sales{tuple_delimiter}financial_metric{tuple_delimiter}Product Sales revenue demonstrating growth from $1,150 thousand in Q2 2024 to $1,200 thousand in Q3 2024, representing a 4.3% quarter-over-quarter increase and strong product demand.){record_delimiter}
-(entity{tuple_delimiter}Service Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Service Revenue showing robust growth from $750 thousand in Q2 2024 to $800 thousand in Q3 2024, achieving a 6.7% quarterly improvement and reflecting expanding service offerings.){record_delimiter}
-(entity{tuple_delimiter}Total Revenue{tuple_delimiter}financial_metric{tuple_delimiter}Total Revenue increased from $1,900 thousand in Q2 2024 to $2,000 thousand in Q3 2024, delivering overall business growth of 5.3% and demonstrating TechCorp's consistent performance trajectory.){record_delimiter}
-(relationship{tuple_delimiter}Product Sales{tuple_delimiter}Service Revenue{tuple_delimiter}revenue composition{tuple_delimiter}Product Sales and Service Revenue are the two main components of TechCorp's total revenue.){record_delimiter}
-(relationship{tuple_delimiter}Product Sales{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Product Sales contributes to Total Revenue calculation.){record_delimiter}
-(relationship{tuple_delimiter}Service Revenue{tuple_delimiter}Total Revenue{tuple_delimiter}financial calculation{tuple_delimiter}Service Revenue contributes to Total Revenue calculation.){record_delimiter}
-(relationship{tuple_delimiter}Q3 2024{tuple_delimiter}Q2 2024{tuple_delimiter}temporal comparison{tuple_delimiter}Q3 2024 shows revenue growth compared to Q2 2024.){record_delimiter}
-{completion_delimiter}
-""",
-    """[Example 6]
-
----Input---
-Entity_types: [organization,financial_metric,account_item,currency,temporal_range]
-Text:
-```
-台灣積體電路製造股份有限公司及子公司
-合併綜合損益表
-民國114年及113年1月1日至3月31日
-單位：新台幣仟元
-
-<table>
-<thead>
-<tr><th>代碼</th><th></th><th>114年1月1日至3月31日</th><th>113年1月1日至3月31日</th></tr>
-</thead>
-<tbody>
-<tr><td>4000</td><td>營業收入淨額</td><td>$ 839,253,664</td><td>$ 592,644,201</td></tr>
-<tr><td>5000</td><td>營業成本</td><td>345,858,588</td><td>268,447,198</td></tr>
-<tr><td>5950</td><td>營業毛利</td><td>493,395,076</td><td>324,197,003</td></tr>
-</tbody>
-</table>
-```
-
----Output---
-(entity{tuple_delimiter}台灣積體電路製造股份有限公司{tuple_delimiter}organization{tuple_delimiter}台灣積體電路製造股份有限公司是一家半導體製造公司，發布民國114年第一季合併綜合損益表，展示營運績效。){record_delimiter}
-(entity{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國114年第一季報告期間，對應公司最新的財務表現。){record_delimiter}
-(entity{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}temporal_range{tuple_delimiter}民國113年第一季比較期間，用於分析公司年度變化趨勢。){record_delimiter}
-(entity{tuple_delimiter}新台幣仟元{tuple_delimiter}currency{tuple_delimiter}新台幣仟元是財務報表的主要計價單位，用於表示金額數據。){record_delimiter}
-(entity{tuple_delimiter}營業收入淨額{tuple_delimiter}financial_metric{tuple_delimiter}營業收入淨額從民國113年第一季的592,644,201新台幣仟元大幅增長至民國114年第一季的839,253,664新台幣仟元，年增長率達41.6%，顯示台積公司強勁的營運表現和市場需求成長。){record_delimiter}
-(entity{tuple_delimiter}營業成本{tuple_delimiter}financial_metric{tuple_delimiter}營業成本從民國113年第一季的268,447,198新台幣仟元增至民國114年第一季的345,858,588新台幣仟元，年增長率28.9%，反映產能擴張和原材料成本上升。){record_delimiter}
-(entity{tuple_delimiter}營業毛利{tuple_delimiter}financial_metric{tuple_delimiter}營業毛利從民國113年第一季的324,197,003新台幣仟元躍升至民國114年第一季的493,395,076新台幣仟元，年增長率高達52.2%，展現優異的獲利能力提升和營運效率改善。){record_delimiter}
-(relationship{tuple_delimiter}營業收入淨額{tuple_delimiter}營業成本{tuple_delimiter}財務計算, 毛利基礎{tuple_delimiter}營業毛利通過營業收入淨額減去營業成本計算得出。){record_delimiter}
-(relationship{tuple_delimiter}民國114年1月1日至3月31日{tuple_delimiter}民國113年1月1日至3月31日{tuple_delimiter}時間比較, 年度分析{tuple_delimiter}兩個報告期間用於分析台積公司年度營運績效變化趨勢。){record_delimiter}
-{completion_delimiter}
-
 """
 ]
 
@@ -335,6 +263,7 @@ Based on the last extraction task, identify and extract any **missed or incorrec
 <Output>
 """
 
+
 # TODO: Deprecated
 PROMPTS["entity_if_loop_extraction"] = """
 ---Goal---'
@@ -349,70 +278,44 @@ PROMPTS["fail_response"] = (
 )
 
 PROMPTS["rag_response"] = """---Role---
-You are an expert AI assistant specializing in synthesizing information from a provided knowledge base. Your primary function is to answer user queries accurately by ONLY using the information within the provided `Source Data`.
-
----Goal---
-Generate a comprehensive, well-structured answer to the user query.
-The answer must integrate relevant facts from the Knowledge Graph and Document Chunks found in the `Source Data`.
-Consider the conversation history if provided to maintain conversational flow and avoid repeating information.
+You are a precise information retrieval assistant. Answer questions using ONLY the facts from Source Data (Document Chunks, Entities, and Relations).
 
 ---Instructions---
-1. **Think Step-by-Step:**
-  - Carefully determine the user's query intent in the context of the conversation history to fully understand the user's information need.
-  - Scrutinize the `Source Data`(both Knowledge Graph and Document Chunks). Identify and extract all pieces of information that are directly relevant to answering the user query.
-  - Weave the extracted facts into a coherent and logical response. Your own knowledge must ONLY be used to formulate fluent sentences and connect ideas, NOT to introduce any external information.
+1. **Data Source Priority:**
+    - Prioritize using **Document Chunks** as the main evidence.
+    - Use **Entities and Relations** only as **auxiliary references** to support or fill missing details when the chunk content is incomplete.
+    - Whenever possible, use the **original phrasing or wording** from the Document Chunk, but minor rephrasing is acceptable for clarity.
 
-2. **Content & Grounding:**
-  - Strictly adhere to the provided context from the `Source Data`; DO NOT invent, assume, or infer any information not explicitly stated.
-  - If the answer cannot be found in the `Source Data`, state that you do not have enough information to answer. Do not attempt to guess.
+2. **For Fact Retrieval Questions:**
+    - Provide a **direct, concise** answer (1–2 sentences)
+    - Prefer to extract the **exact phrase** from Document Chunks
+    - Do **not** add explanations, background, or assumptions
 
-3. **Formatting & Language:**
-  - The response MUST be in the same language as the user query.
-  - Use Markdown for clear formatting (e.g., headings, bold, lists).
-  - The response should be presented in {response_type}.
-  - Append a reference section at the end of the response.
-  - Merge citations that share the same file_path into one reference item.
-  - The main body of the response should exclude inline citations; all citation information should be listed exclusively in the references section.
+3. **For Complex Reasoning Questions:**
+    - Answer in **2–4 sentences maximum**
+    - Combine only the **minimal necessary facts** from Source Data
+    - Avoid detailed analysis, speculation, or unrelated context
 
-4. **Reference/Citation Format:**
-  - Append a reference section at the end of the response.
-  - The References section should be under a `### References` heading.
-  - Output the citation in the following formats:
-    - For a Knowledge Graph Entity: [EN] <entity>
-    - For a Knowledge Graph Relationship: [RE] <entity1> ~ <entity2>
-    - For a Document Chunk: [DC] <file_path>
-  - <entity>, <entity1>, <entity2>, and <file_path> should originate from attribute values in `Source Data` and be retained in their original language.
-  - Merge citations that share the same <file_path> into one reference item, disregarding their distinct IDs.
-  - Only include citations that directly reference the facts presented in the answer.
-  - Prioritize the most relevant references, and provide maximum of 6 most relevant citations.
-  - List each citation on an individual line.
+4. **For Contextual Summarize Questions:**
+    - Synthesize fragmented information into a **coherent, structured answer**
+    - Prioritize **completeness over brevity** - include all key facts from Source Data
+    - Organize information logically with smooth transitions between related facts
 
-5. **Example of Section:**
-```
-### References
-- [EN] LightRAG
-- [EN] Dual-Level Retrieval System
-- [RE] LightRAG ~ GraphRAG
-- [DC] Simple and Fast RAG.pdf
-- [DC] LightRAG Simple and Fast Alternative to GraphRAG for Legal Doc Analysis.md
-- [DC] Microsoft GraphRAG Technology Summary.md
-```
+5. **For Creative Generation Questions:**
+    - **Every statement** must be directly inferable from Source Data - do NOT invent details
+    - Use creative language for presentation, but maintain strict factual accuracy
 
-6. **Table Data Processing:** When Source Data contains tabular information:
-  - Preserve Exact Values: Maintain original numerical values and currency units from source data
-  - Table Formatting: Use Markdown table syntax to present structured data clearly
-  - Units and Currency: Always include original units (e.g., "新台幣仟元", "USD thousands")
-  - Mathematical Relationships: When source data shows calculations, preserve the relationship context
-  - Temporal Data: Maintain time period labels exactly as provided in source data
+6. **Strict Grounding:**
+    - Use ONLY information explicitly stated in Source Data
+    - Do not introduce external knowledge or unverifiable claims
 
----USER CONTEXT---
-- Additional user prompt: {user_prompt}
+7. **Formatting & Language:**
+    - Output must be **concise and factual**
+    - Avoid lists or multi-paragraph explanations unless explicitly asked
+    - Only provide detailed or enumerated answers when the question requests it (e.g., “list all reasons” or “explain in detail”)
 
 ---Source Data---
-Knowledge Graph and Document Chunks:
-
 {context_data}
-
 
 """
 
