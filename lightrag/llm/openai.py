@@ -157,6 +157,16 @@ async def openai_complete_if_cache(
     # Extract client configuration options
     client_configs = kwargs.pop("openai_client_configs", {})
 
+    # Handle max_tokens vs max_completion_tokens for GPT-5 models
+    # GPT-5 models require max_completion_tokens instead of max_tokens
+    if model.startswith("gpt-5") or model.startswith("o1") or model.startswith("o3"):
+        if "max_tokens" in kwargs:
+            # Convert max_tokens to max_completion_tokens for these models
+            if "max_completion_tokens" not in kwargs:
+                kwargs["max_completion_tokens"] = kwargs["max_tokens"]
+            # Remove max_tokens to avoid API error
+            kwargs.pop("max_tokens")
+
     # Create the OpenAI client
     openai_async_client = create_openai_async_client(
         api_key=api_key,
