@@ -1060,6 +1060,7 @@ async def _retry_malformed_extraction(
     malformed_records: list[str],
     use_llm_func: callable,
     context_base: dict,
+    system_prompt: str,
     llm_response_cache=None,
     max_retries: int = 2,
 ) -> tuple[dict, dict]:
@@ -1073,6 +1074,7 @@ async def _retry_malformed_extraction(
         malformed_records: List of malformed record strings
         use_llm_func: LLM function to use
         context_base: Context for prompt formatting
+        system_prompt: System prompt for cache-optimized extraction
         llm_response_cache: Cache for LLM responses
         max_retries: Maximum number of retry attempts
 
@@ -1087,21 +1089,19 @@ async def _retry_malformed_extraction(
     if not malformed_records:
         return dict(retry_nodes), dict(retry_edges)
 
-    # Format the complete entity extraction prompt for retry
-    entity_extract_prompt = PROMPTS["entity_extraction"]
-
-    retry_prompt_text = entity_extract_prompt.format(
-        **{**context_base, "input_text": original_content, "timestamp": timestamp}
-    ) + f"\n\nRETRY CONTEXT:\nYour previous extraction contained malformed records: {malformed_records}\nPlease re-extract ALL entities and relationships from the text above, ensuring correct format."
+    # Build user prompt for retry with malformed records context
+    user_prompt_base = PROMPTS["entity_extraction_user"].format(input_text=original_content)
+    retry_user_prompt = user_prompt_base + f"\n\nRETRY CONTEXT:\nYour previous extraction contained malformed records: {malformed_records}\nPlease re-extract ALL entities and relationships from the text above, ensuring correct format."
 
     for attempt in range(max_retries):
         try:
             # Retry attempt in progress
 
-            # Use LLM function with cache
+            # Use LLM function with cache and separated prompts
             retry_result = await use_llm_func_with_cache(
-                retry_prompt_text,
+                retry_user_prompt,
                 use_llm_func,
+                system_prompt=system_prompt,  # Reuse system prompt for caching
                 llm_response_cache=llm_response_cache,
                 cache_type="extract_retry",
                 chunk_id=f"{chunk_key}_retry_{attempt}",
@@ -2360,7 +2360,6 @@ async def extract_entities(
     # add example's format
     examples = examples.format(**example_context_base)
 
-    entity_extract_prompt = PROMPTS["entity_extraction"]
     context_base = dict(
         tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
         record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
@@ -2371,6 +2370,29 @@ async def extract_entities(
     )
 
     continue_prompt = PROMPTS["entity_continue_extraction"].format(**context_base)
+
+    # Build system prompt ONCE (cacheable portion for OpenAI prompt caching)
+    # This enables automatic caching when system prompt >= 1024 tokens
+    system_prompt_cacheable = PROMPTS["entity_extraction_system"].format(
+        tuple_delimiter=PROMPTS["DEFAULT_TUPLE_DELIMITER"],
+        record_delimiter=PROMPTS["DEFAULT_RECORD_DELIMITER"],
+        completion_delimiter=PROMPTS["DEFAULT_COMPLETION_DELIMITER"],
+        entity_types=",".join(entity_types),
+        examples=examples,
+        language=language,
+    )
+
+    # Verify cacheable portion meets OpenAI's 1024 token threshold
+    tokenizer = global_config.get("tokenizer")
+    if tokenizer:
+        system_tokens = len(tokenizer.encode(system_prompt_cacheable))
+        if system_tokens >= 1024:
+            logger.info(f"Entity extraction system prompt: {system_tokens} tokens (caching enabled at ≥1024)")
+        else:
+            logger.warning(
+                f"Entity extraction system prompt only {system_tokens} tokens, "
+                f"below OpenAI's 1024 token caching threshold"
+            )
 
     processed_chunks = 0
     total_chunks = len(ordered_chunks)
@@ -2395,22 +2417,22 @@ async def extract_entities(
         # Create cache keys collector for batch processing
         cache_keys_collector = []
 
-        # Get initial extraction
-        hint_prompt = entity_extract_prompt.format(
-            **{**context_base, "input_text": content, "timestamp": timestamp}
-        )
+        # Get initial extraction using cache-optimized prompts (system + user separated)
+        user_prompt = PROMPTS["entity_extraction_user"].format(input_text=content)
 
         final_result = await use_llm_func_with_cache(
-            hint_prompt,
+            user_prompt,
             use_llm_func,
+            system_prompt=system_prompt_cacheable,  # ← Automatically cached by OpenAI when ≥1024 tokens
             llm_response_cache=llm_response_cache,
             cache_type="extract",
             chunk_id=chunk_key,
             cache_keys_collector=cache_keys_collector,
         )
 
-        # Store LLM cache reference in chunk (will be handled by use_llm_func_with_cache)
-        history = pack_user_ass_to_openai_messages(hint_prompt, final_result)
+        # Build history with system prompt for subsequent gleaning calls
+        history = [{"role": "system", "content": system_prompt_cacheable}]
+        history.extend(pack_user_ass_to_openai_messages(user_prompt, final_result))
 
         # Process initial extraction with file path and timestamp
         maybe_nodes, maybe_edges = await _process_extraction_result(
@@ -2437,6 +2459,7 @@ async def extract_entities(
                 malformed_records,
                 use_llm_func,
                 context_base,
+                system_prompt_cacheable,  # Pass system prompt for caching
                 llm_response_cache=llm_response_cache,
                 max_retries=entity_extract_max_retries,
             )

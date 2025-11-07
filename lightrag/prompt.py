@@ -10,7 +10,9 @@ PROMPTS["DEFAULT_COMPLETION_DELIMITER"] = "<|COMPLETE|>"
 
 PROMPTS["DEFAULT_USER_PROMPT"] = "n/a"
 
-PROMPTS["entity_extraction"] = """---Task---
+# Entity extraction prompts split into system (cacheable) and user (variable) parts
+# This enables OpenAI prompt caching when system prompt >= 1024 tokens
+PROMPTS["entity_extraction_system"] = """---Task---
 Given a text document and a list of entity types, identify all entities of those types and all relationships among the identified entities.
 
 ---Role---
@@ -67,23 +69,14 @@ The `{tuple_delimiter}` is a complete, atomic marker and **must not be filled wi
 
 8.  **Completion Signal:** Use `{record_delimiter}` as the entity or relationship list delimiter; output `{completion_delimiter}` when all the entities and relationships are extracted.
 
-9. **Table Processing:** When processing HTML tables (<table>...</table>), pay special attention to:
-    - **Table Headers**: Extract significant column and row names as they often represent key dimensions, categories, or time periods.
-    - **Quantitative Data**: Extract numerical values, percentages, and metrics.
-    - **Categorical Items**: Extract classification terms, labels, and structured categories.
-    - **Units and Standards**: Extract measurement units, currencies, or standardization information.
-    - **Temporal Information**: Link data to relevant time periods, dates, or versions.
-    - **Hierarchical Structure**: Recognize relationships within table categories and subcategories.
-    - **Key Information Priority**: Focus on extracting the most significant data points rather than comprehensive coverage.
-    - **Caption and Title Context**: Extract table captions, titles, and metadata appearing outside `<table></table>` tags for additional context.
-
 ---Examples---
 {examples}
 
 ---Real Data to be Processed---
-<Input>
 Entity_types: [{entity_types}]
-Text:
+"""
+
+PROMPTS["entity_extraction_user"] = """Text:
 ```
 {input_text}
 ```
@@ -201,46 +194,66 @@ During Apple's Q3 2024 earnings call on July 31, 2024, CEO Tim Cook announced th
 ]
 
 PROMPTS["summarize_entity_descriptions"] = """---Role---
-You are a Knowledge Graph Specialist responsible for data curation and synthesis.
+You are a Knowledge Graph Specialist, proficient in data curation and synthesis.
 
 ---Task---
 Your task is to synthesize a list of descriptions of a given entity or relation into a single, comprehensive, and cohesive summary.
 
 ---Instructions---
-1. **Comprehensiveness:** The summary must integrate key information from all provided descriptions. Do not omit important facts.
-2. **Context:** The summary must explicitly mention the name of the entity or relation for full context.
-3. **Temporal Information:**
-   - **If descriptions contain timestamp prefixes** (e.g., "[Time: Fiscal Year 2024-Q1]", "[Time: Fiscal Year 2024-Q3]", "[Time: 2024-07]"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
+1. **Input Format:** The description list contains multiple descriptions separated by blank lines. Each description is a plain text string.
+
+2. **Output Format:** Return the merged description as plain text only. The summary may span multiple paragraphs if needed for clarity. Do not include any introductory phrases (e.g., "Here is the summary:"), metadata, or concluding remarks—output the summary content directly.
+
+3. **Comprehensiveness:** The summary must integrate all key information from *every* provided description. Do not omit any important facts or details.
+
+4. **Context & Objectivity:**
+   - Write the summary from an objective, third-person perspective.
+   - Explicitly mention the full name of the entity or relation at the beginning of the summary to ensure immediate clarity and context.
+
+5. **Temporal Information:**
+   - **If descriptions contain timestamp prefixes** (e.g., "[Time: Fiscal Year 2024-Q1]", "[Time: Fiscal Year 2024-Q3]", "[Time: 2024-07]", "[Time: Chapter 3]"), you MUST preserve the exact timestamp format at the beginning of relevant sentences. Organize information chronologically and maintain all temporal markers from the original descriptions.
    - **If descriptions do NOT contain timestamp prefixes**, synthesize the information naturally without adding or inventing temporal markers.
 
-**Example without timestamps:**
-Input descriptions:
-- "Apple is a technology company headquartered in Cupertino, California"
-- "Apple designs and manufactures consumer electronics, software, and online services"
+   **Example without timestamps:**
+   Input descriptions:
+   - "Apple is a technology company headquartered in Cupertino, California"
+   - "Apple designs and manufactures consumer electronics, software, and online services"
 
-Required output format:
-"Apple is a technology company headquartered in Cupertino, California that designs and manufactures consumer electronics, software, and online services."
+   Required output format:
+   "Apple is a technology company headquartered in Cupertino, California that designs and manufactures consumer electronics, software, and online services."
 
-DO NOT add timestamp prefixes like "[Time: ...]" when they are not present in the original descriptions.
+   DO NOT add timestamp prefixes like "[Time: ...]" when they are not present in the original descriptions.
 
-**Example with timestamps:**
-Input descriptions:
-- "[Time: Fiscal Year 2024-Q1] Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
-- "[Time: Fiscal Year 2024-Q3] Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
+   **Example with timestamps:**
+   Input descriptions:
+   - "[Time: Fiscal Year 2024-Q1] Apple technology company reported iPhone revenue of $65.8B, up 15% YoY with strong market performance"
+   - "[Time: Fiscal Year 2024-Q3] Apple technology company faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation"
 
-Required output format:
-"Apple technology company shows mixed quarterly performance. [Time: Fiscal Year 2024-Q1] Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. [Time: Fiscal Year 2024-Q3] Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
+   Required output format:
+   "Apple technology company shows mixed quarterly performance. [Time: Fiscal Year 2024-Q1] Apple reported iPhone revenue of $65.8B, up 15% YoY with strong market performance. [Time: Fiscal Year 2024-Q3] Apple faced challenges with iPhone revenue of $39.3B, down 1.5% YoY due to market saturation."
 
-4. **Conflict Resolution:** In case of conflicting or inconsistent descriptions from different time periods, prioritize more recent information while preserving historical context. If conflicts arise from distinct entities sharing the same name, treat them separately. When temporal information conflicts (e.g., same quarter with different data), note the discrepancy explicitly.
-5. **Relevance Filtering:** Focus on substantive information. Remove redundant phrases while preserving unique details from each description.
-6. **Style:** The output must be written from an objective, third-person perspective.
-7. **Length:** Maintain depth and completeness while ensuring the summary's length not exceed {summary_length} tokens.
-8. **Language:** The entire output must be written in {language}.
+6. **Conflict Handling:**
+   - In cases of conflicting or inconsistent descriptions, first determine if these conflicts arise from multiple, distinct entities or relationships that share the same name.
+   - If distinct entities/relations are identified, summarize each one *separately* within the overall output.
+   - If conflicts within a single entity/relation exist (e.g., historical discrepancies from different time periods), attempt to reconcile them or present both viewpoints with noted uncertainty. When temporal information conflicts (e.g., same quarter with different data), note the discrepancy explicitly.
+   - For time-based conflicts, prioritize more recent information while preserving historical context.
 
----Data---
+7. **Relevance Filtering:** Focus on substantive information. Remove redundant phrases while preserving unique details from each description.
+
+8. **Length Constraint:** The summary's total length must not exceed {summary_length} tokens, while still maintaining depth and completeness.
+
+9. **Language:**
+   - The entire output must be written in {language}.
+   - Proper nouns (e.g., personal names, place names, organization names) should be retained in their original language if a proper, widely accepted translation is not available or would cause ambiguity.
+
+---Input---
 {description_type} Name: {description_name}
+
 Description List:
+
+```
 {description_list}
+```
 
 ---Output---
 """

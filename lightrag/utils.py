@@ -1607,6 +1607,7 @@ async def use_llm_func_with_cache(
     llm_response_cache: "BaseKVStorage | None" = None,
     max_tokens: int = None,
     history_messages: list[dict[str, str]] = None,
+    system_prompt: str | None = None,
     cache_type: str = "extract",
     chunk_id: str | None = None,
     cache_keys_collector: list = None,
@@ -1624,6 +1625,7 @@ async def use_llm_func_with_cache(
         llm_response_cache: Cache storage instance
         max_tokens: Maximum tokens for generation
         history_messages: History messages list
+        system_prompt: Optional system prompt for cache-optimized calls (enables prompt caching)
         cache_type: Type of cache
         chunk_id: Chunk identifier to store in cache
         text_chunks_storage: Text chunks storage to update llm_cache_list
@@ -1680,6 +1682,9 @@ async def use_llm_func_with_cache(
             kwargs["history_messages"] = safe_history_messages
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if system_prompt is not None:
+            # Sanitize system prompt for cache-optimized calls
+            kwargs["system_prompt"] = sanitize_text_for_encoding(system_prompt)
 
         res: str = await use_llm_func(safe_input_text, **kwargs)
 
@@ -1709,6 +1714,9 @@ async def use_llm_func_with_cache(
         kwargs["history_messages"] = safe_history_messages
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if system_prompt is not None:
+        # Sanitize system prompt for cache-optimized calls
+        kwargs["system_prompt"] = sanitize_text_for_encoding(system_prompt)
 
     try:
         res = await use_llm_func(safe_input_text, **kwargs)
