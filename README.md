@@ -99,13 +99,13 @@ $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 ### 🎯 **Context Recognition Filtering**
 
 * **Problem**: Retrieved entities and relations often contain noise irrelevant to the query, wasting tokens and diluting LLM focus on critical information.
-* **Solution**: KairosRAG employs **LLM-based relevance filtering** that removes irrelevant entities/relations with >95% confidence, while preserving multi-hop reasoning paths and contextual information.
+* **Solution**: KairosRAG employs **LLM-based relevance filtering** that removes irrelevant entities/relations, while preserving multi-hop reasoning paths and contextual information.
 
 **Mathematical Framework:**
 
 - **Removal Decision Function:**
 
-$$R(e_i) = \mathbb{I}[LLM_{confidence}("Irrelevant\ to\ query?", context(q, e_i))]$$
+$$R(e_i) = \mathbb{I}[LLM("Irrelevant\ to\ query?", context(q, e_i))]$$
 
 where $q$ = user query, $e_i$ = entity/relation
 
@@ -242,7 +242,7 @@ KairosRAG extends **LightRAG** with:
 2. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Context-aware FastRP structural similarity providing complementary retrieval perspectives.
 3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
 4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
-5. **Context Recognition Filtering** – LLM-based relevance filtering with >95% confidence threshold to remove query-irrelevant entities/relations.
+5. **Context Recognition Filtering** – LLM-based relevance filtering to remove query-irrelevant entities/relations.
 6. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.
 
 ---
