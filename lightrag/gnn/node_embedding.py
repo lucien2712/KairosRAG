@@ -298,6 +298,26 @@ class NodeEmbeddingEnhancer:
 
         logger.debug("All caches invalidated")
 
+    async def build_relations_cache(self, knowledge_graph_inst):
+        """
+        Pre-build relation cache during insert to speed up first query.
+
+        This method fetches all relations from the knowledge graph and saves them
+        to disk with gzip compression. By building the cache during insert rather
+        than on first query, we eliminate the 30-60 second delay users would
+        otherwise experience on their first query.
+
+        Args:
+            knowledge_graph_inst: Knowledge graph storage instance to fetch relations from
+        """
+        logger.info("Building relation cache after insert to speed up first query...")
+        try:
+            await self.get_all_relations_cached(knowledge_graph_inst)
+            logger.info(f"Relation cache built successfully with {len(self._relations_cache)} relations")
+        except Exception as e:
+            logger.warning(f"Failed to build relation cache during insert: {e}. Cache will be built on first query.")
+            # Non-fatal: cache will be built on first query if this fails
+
     async def _get_relation_embeddings_from_vdb(
         self,
         knowledge_graph_inst,

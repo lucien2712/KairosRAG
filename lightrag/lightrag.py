@@ -3285,13 +3285,16 @@ class LightRAG:
 
             # Invalidate relations cache to ensure fresh data after insertions
             self.node_embedding.invalidate_relations_cache()
-            
+
             # Compute embeddings (note: text_embeddings parameter is not used in current implementation)
             await self.node_embedding.compute_node_embeddings(
                 entities=entities,
-                relations=relations, 
+                relations=relations,
                 text_embeddings={}
             )
+
+            # Pre-build relation cache to speed up first query after insert
+            await self.node_embedding.build_relations_cache(self.chunk_entity_relation_graph)
 
             logger.info("Successfully computed FastRP embeddings after document insertion")
 
