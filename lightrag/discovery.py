@@ -674,64 +674,136 @@ async def entity_type_discovery(
 
         logger.info(f"Processing {len(file_text_pairs)} documents for entity type discovery")
 
-        # Step 3: Process files with LLM to suggest new entity types (with periodic refinement)
-        # Dynamically adjust refinement interval based on max_async:
-        # - Small max_async (<10): refine more frequently to match parallel capacity and provide timely updates
-        # - Large max_async (>=10): cap at 10 to maintain stable refinement frequency and avoid excessive LLM calls
+        # Step 2.5: Pre-chunk all documents into individual chunks for fine-grained processing
+        # This allows us to perform refinement every N chunks instead of every N documents
+        logger.info("Pre-chunking documents into individual chunks...")
+        from .operate import chunking_by_token_size
+
+        chunk_pairs = []  # [(chunk_id, chunk_content), ...]
+        for file_name, file_content in file_text_pairs:
+            try:
+                token_count = len(rag_instance.tokenizer.encode(file_content))
+
+                if token_count > 30000:
+                    # Large document: split into chunks
+                    chunks = chunking_by_token_size(
+                        tokenizer=rag_instance.tokenizer,
+                        content=file_content,
+                        max_token_size=30000,
+                        overlap_token_size=500
+                    )
+                    logger.info(f"Document '{file_name}': {token_count} tokens → {len(chunks)} chunks")
+
+                    for chunk_idx, chunk_data in enumerate(chunks, 1):
+                        chunk_id = f"{file_name}_chunk_{chunk_idx}"
+                        chunk_pairs.append((chunk_id, chunk_data["content"]))
+                else:
+                    # Small document: treat as single chunk
+                    logger.debug(f"Document '{file_name}': {token_count} tokens (single chunk)")
+                    chunk_pairs.append((file_name, file_content))
+
+            except Exception as e:
+                logger.warning(f"Failed to chunk document '{file_name}': {e}, treating as single chunk")
+                chunk_pairs.append((file_name, file_content))
+
+        logger.info(f"Pre-chunking complete: {len(file_text_pairs)} documents → {len(chunk_pairs)} chunks")
+
+        # Step 3: Process chunks with LLM to suggest new entity types (with periodic refinement)
+        # Refinement interval: every 10 chunks (not documents!)
         max_async = rag_instance.llm_model_max_async
-        REFINE_INTERVAL = min(10, max_async)
+        REFINE_INTERVAL = 10  # Fixed: refine every 10 chunks
         all_new_entity_types = []
 
         # Use llm_model_max_async for concurrency control
         semaphore = asyncio.Semaphore(max_async)
-        logger.info(f"Processing files with max_async={max_async}, refinement every {REFINE_INTERVAL} files")
+        logger.info(f"Processing chunks with max_async={max_async}, refinement every {REFINE_INTERVAL} chunks")
 
         # Create callback wrappers for helper functions
         def _extract_json_callback(response_content):
             return extract_json_from_response(response_content)
 
-        async def _process_large_file_callback(file_content, current_types):
-            return await process_large_file_with_chunking(
-                file_content,
-                current_types,
-                rag_instance.tool_llm_model_name,
-                rag_instance.tokenizer,
-                _extract_json_callback,
-                rag_instance.openai_client,  # 傳入共用的 OpenAI client
-                token_tracker,  # 傳入 token tracker
-                tool_llm_model_kwargs  # 傳入 tool LLM kwargs
-            )
+        # Note: No need for _process_large_file_callback since chunking is done upfront
 
-        async def process_file_with_limit(file_name: str, text_content: str, entity_types: list):
+        async def process_chunk_with_limit(chunk_id: str, chunk_content: str, entity_types: list):
+            """Process a single chunk (already chunked, no auto-chunking needed)"""
             async with semaphore:
-                logger.debug(f"Processing file: {file_name}")
-                return await process_file_with_llm(
-                    text_content,
-                    entity_types,
-                    rag_instance.tool_llm_model_name,
-                    rag_instance.tokenizer,
-                    _extract_json_callback,
-                    _process_large_file_callback,
-                    rag_instance.openai_client,  # 傳入共用的 OpenAI client
-                    token_tracker,  # 傳入 token tracker
-                    tool_llm_model_kwargs  # 傳入 tool LLM kwargs
+                logger.debug(f"Processing chunk: {chunk_id}")
+                # Directly process the chunk without auto-chunking logic
+                # (token count already verified during pre-chunking)
+                max_retries = 3
+                client = rag_instance.openai_client
+                current_entity_types_json = json.dumps(
+                    [et["entity_type"] for et in entity_types]
                 )
 
-        # Process files in batches of REFINE_INTERVAL
-        total_files = len(file_text_pairs)
+                if tool_llm_model_kwargs is None:
+                    llm_kwargs = {}
+                else:
+                    llm_kwargs = tool_llm_model_kwargs
+
+                for attempt in range(max_retries):
+                    try:
+                        api_params = {
+                            "model": rag_instance.tool_llm_model_name,
+                            "messages": [
+                                {
+                                    "role": "system",
+                                    "content": PROMPTS["entity_type_suggestion_system"],
+                                },
+                                {
+                                    "role": "user",
+                                    "content": PROMPTS["entity_type_suggestion_user"].format(
+                                        current_entity_types=current_entity_types_json,
+                                        file_content=chunk_content
+                                    ),
+                                },
+                            ],
+                            **llm_kwargs
+                        }
+
+                        response = client.chat.completions.create(**api_params)
+
+                        # Track tokens
+                        if token_tracker and hasattr(response, 'usage') and response.usage:
+                            token_counts = {
+                                'prompt_tokens': getattr(response.usage, 'prompt_tokens', 0),
+                                'completion_tokens': getattr(response.usage, 'completion_tokens', 0),
+                                'total_tokens': getattr(response.usage, 'total_tokens', 0),
+                            }
+                            token_tracker.add_usage(token_counts)
+
+                        llm_response = response.choices[0].message.content
+                        suggested_types = _extract_json_callback(llm_response)
+
+                        if suggested_types and isinstance(suggested_types, list):
+                            return suggested_types
+                        else:
+                            continue
+
+                    except Exception as e:
+                        logger.warning(f"Attempt {attempt + 1}/{max_retries}: Error processing chunk: {e}")
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            return []
+
+                return []
+
+        # Process chunks in batches of REFINE_INTERVAL
+        total_chunks = len(chunk_pairs)
         processed_count = 0
 
-        for batch_start in range(0, total_files, REFINE_INTERVAL):
-            batch_end = min(batch_start + REFINE_INTERVAL, total_files)
-            batch = file_text_pairs[batch_start:batch_end]
+        for batch_start in range(0, total_chunks, REFINE_INTERVAL):
+            batch_end = min(batch_start + REFINE_INTERVAL, total_chunks)
+            batch = chunk_pairs[batch_start:batch_end]
             batch_size = len(batch)
 
-            logger.info(f"Processing batch {batch_start + 1}-{batch_end}/{total_files} ({batch_size} files)")
+            logger.info(f"Processing batch {batch_start + 1}-{batch_end}/{total_chunks} ({batch_size} chunks)")
 
             # Create tasks for current batch using current_entity_types
             tasks = [
-                process_file_with_limit(file_name, text_content, current_entity_types)
-                for file_name, text_content in batch
+                process_chunk_with_limit(chunk_id, chunk_content, current_entity_types)
+                for chunk_id, chunk_content in batch
             ]
 
             # Execute batch in parallel
@@ -742,11 +814,11 @@ async def entity_type_discovery(
                 all_new_entity_types.extend(new_entity_types)
 
             processed_count += batch_size
-            logger.info(f"Completed {processed_count}/{total_files} files")
+            logger.info(f"Completed {processed_count}/{total_chunks} chunks")
 
             # Perform refinement after each batch (except for the last batch if it will be refined at the end)
-            if batch_end < total_files or batch_end == total_files:
-                logger.info(f"🔄 Performing refinement after {processed_count} files...")
+            if batch_end < total_chunks or batch_end == total_chunks:
+                logger.info(f"🔄 Performing refinement after {processed_count} chunks...")
 
                 # Combine current entity types with new suggestions
                 combined_entity_types = current_entity_types + all_new_entity_types
@@ -773,7 +845,7 @@ async def entity_type_discovery(
 
         # Use the final refined entity types
         refined_entity_types = current_entity_types
-        logger.info(f"All files processed. Final entity types: {len(refined_entity_types)}")
+        logger.info(f"All chunks processed ({total_chunks} chunks from {len(file_text_pairs)} documents). Final entity types: {len(refined_entity_types)}")
 
         # Step 6: Save final entity types (already saved during periodic refinement, but ensure final state)
         save_entity_types(rag_instance.working_dir, refined_entity_types)
@@ -796,7 +868,8 @@ async def entity_type_discovery(
             "initial_entity_types": initial_entity_types_count,
             "final_entity_types": len(refined_entity_types),
             "new_entity_types": len(refined_entity_types) - initial_entity_types_count,
-            "files_processed": len(file_text_pairs)
+            "documents_processed": len(file_text_pairs),
+            "chunks_processed": total_chunks
         }
 
     except Exception as e:
