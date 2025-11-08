@@ -897,6 +897,127 @@ def get_data_init_lock(enable_logging: bool = False) -> UnifiedLock:
     )
 
 
+# ============================================================================
+# Entity-level Lock Manager for Agentic Merging
+# ============================================================================
+
+class EntityLockManager:
+    """
+    Manages entity-level locks for agentic merging to prevent concurrent
+    modifications to the same entities.
+
+    When merging A ← B (B merges into A), we need to lock both A and B to prevent:
+    - Concurrent merges targeting A (e.g., A←B and A←C)
+    - Concurrent merges involving B as source (e.g., A←B and B←Z)
+    - Concurrent merges involving B as target (e.g., A←B and D←B)
+    """
+
+    def __init__(self):
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._lock_creation_lock = asyncio.Lock()
+        self._lock_ref_counts: dict[str, int] = {}
+
+    async def _get_lock(self, entity_id: str) -> asyncio.Lock:
+        """Get or create a lock for a specific entity"""
+        if entity_id in self._locks:
+            return self._locks[entity_id]
+
+        async with self._lock_creation_lock:
+            # Double-check after acquiring lock
+            if entity_id not in self._locks:
+                self._locks[entity_id] = asyncio.Lock()
+                self._lock_ref_counts[entity_id] = 0
+            return self._locks[entity_id]
+
+    def is_any_locked(self, *entity_ids: str) -> bool:
+        """Check if any of the given entities is currently locked"""
+        for entity_id in entity_ids:
+            if entity_id in self._locks and self._locks[entity_id].locked():
+                return True
+        return False
+
+    async def acquire_locks(self, *entity_ids: str):
+        """
+        Acquire locks for multiple entities in a deadlock-free manner.
+        Returns an async context manager.
+
+        Locks are acquired in sorted order (by entity ID) to prevent deadlock.
+        For example, both A←B and B←A will acquire locks in the same order.
+        """
+        # Remove duplicates and sort to ensure consistent order
+        sorted_ids = sorted(set(entity_ids))
+
+        # Get all locks (create if needed)
+        locks = [await self._get_lock(entity_id) for entity_id in sorted_ids]
+
+        # Return context manager
+        return _EntityLocksContext(self, sorted_ids, locks)
+
+    async def _increment_ref_count(self, entity_id: str):
+        """Increment reference count for an entity lock"""
+        async with self._lock_creation_lock:
+            if entity_id in self._lock_ref_counts:
+                self._lock_ref_counts[entity_id] += 1
+
+    async def _decrement_ref_count(self, entity_id: str):
+        """Decrement reference count and clean up unused locks"""
+        async with self._lock_creation_lock:
+            if entity_id in self._lock_ref_counts:
+                self._lock_ref_counts[entity_id] -= 1
+
+                # Clean up if no longer in use and not locked
+                if (self._lock_ref_counts[entity_id] == 0 and
+                    entity_id in self._locks and
+                    not self._locks[entity_id].locked()):
+                    del self._locks[entity_id]
+                    del self._lock_ref_counts[entity_id]
+
+
+class _EntityLocksContext:
+    """Context manager for acquiring multiple entity locks"""
+
+    def __init__(self, manager: EntityLockManager, entity_ids: list[str], locks: list[asyncio.Lock]):
+        self.manager = manager
+        self.entity_ids = entity_ids
+        self.locks = locks
+
+    async def __aenter__(self):
+        """Acquire all locks in order"""
+        # Increment reference counts
+        for entity_id in self.entity_ids:
+            await self.manager._increment_ref_count(entity_id)
+
+        # Acquire locks in order (deadlock-free)
+        for lock in self.locks:
+            await lock.acquire()
+
+        return self
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Release all locks in reverse order"""
+        # Release locks in reverse order
+        for lock in reversed(self.locks):
+            lock.release()
+
+        # Decrement reference counts and clean up
+        for entity_id in self.entity_ids:
+            await self.manager._decrement_ref_count(entity_id)
+
+        return False
+
+
+# Global entity lock manager instance
+_entity_lock_manager: EntityLockManager = None
+
+
+def get_entity_lock_manager() -> EntityLockManager:
+    """Get the global entity lock manager instance for agentic merging"""
+    global _entity_lock_manager
+    if _entity_lock_manager is None:
+        _entity_lock_manager = EntityLockManager()
+    return _entity_lock_manager
+
+
 def cleanup_keyed_lock() -> Dict[str, Any]:
     """
     Force cleanup of expired keyed locks and return comprehensive status information.

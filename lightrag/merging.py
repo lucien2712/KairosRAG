@@ -29,6 +29,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
     import time as time_module
     from .operate import _handle_entity_relation_summary
     from .utils import compute_mdhash_id
+    from .kg.shared_storage import get_entity_lock_manager
 
     start_time = time_module.time()
     print(f"Starting agentic entity merging with threshold={threshold}")
@@ -143,154 +144,176 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         "relation_llm_calls": 0
     }
 
+    # Get entity lock manager
+    lock_mgr = get_entity_lock_manager()
+
     # Define the merge tool for LLM
     @tool
     async def merge_entities_tool(a_entity_id: str, b_entity_id: str) -> str:
         """
         If two entities represent the same real-world entity, merge b_entity_id into a_entity_id.
         """
-        try:
-            # print(f"TOOL CALLED: Merging {b_entity_id} -> {a_entity_id}")
+        # Acquire locks for both entities to prevent concurrent modifications
+        # Locks are acquired in sorted order to prevent deadlock
+        async with await lock_mgr.acquire_locks(a_entity_id, b_entity_id):
+            try:
+                # print(f"TOOL CALLED: Merging {b_entity_id} -> {a_entity_id}")
 
-            # Step 1: Perform merge with concatenation
-            await rag_instance.amerge_entities(
-                source_entities=[a_entity_id, b_entity_id],
-                target_entity=a_entity_id,
-                merge_strategy={
-                    "created_at": "keep_last",
-                    "description": "concatenate",
-                    "entity_type": "keep_first",
-                    "source_id": "join_unique",
-                    "file_path": "join_unique",
-                },
-            )
+                # CRITICAL: Validate entity existence after acquiring locks
+                # This prevents TOCTOU race conditions where entities are deleted
+                # between evaluation and execution
+                entity_a = await rag_instance.chunk_entity_relation_graph.get_node(a_entity_id)
+                entity_b = await rag_instance.chunk_entity_relation_graph.get_node(b_entity_id)
 
-            # Step 2: Summarize merged entity description using same logic as normal insertion
-            merged_node = await rag_instance.chunk_entity_relation_graph.get_node(a_entity_id)
-            if merged_node and 'description' in merged_node and merged_node['description']:
-                description_list = merged_node['description'].split('\n\n')
+                if entity_a is None or entity_b is None:
+                    missing = []
+                    if entity_a is None:
+                        missing.append(a_entity_id)
+                    if entity_b is None:
+                        missing.append(b_entity_id)
+                    skip_msg = f"Merge skipped: Entities no longer exist: {', '.join(missing)}"
+                    print(f"SKIPPED: {b_entity_id} -> {a_entity_id} (entities deleted by concurrent operation)")
+                    return skip_msg
 
-                # Use the same summarization logic as normal entity insertion
-                summarized_desc, llm_used = await _handle_entity_relation_summary(
-                    description_type="Entity",
-                    entity_or_relation_name=a_entity_id,
-                    description_list=description_list,
-                    global_config=global_config,
-                    llm_response_cache=rag_instance.llm_response_cache,
-                    seperator="\n\n"
+                # Step 1: Perform merge with concatenation
+                await rag_instance.amerge_entities(
+                    source_entities=[a_entity_id, b_entity_id],
+                    target_entity=a_entity_id,
+                    merge_strategy={
+                        "created_at": "keep_last",
+                        "description": "concatenate",
+                        "entity_type": "keep_first",
+                        "source_id": "join_unique",
+                        "file_path": "join_unique",
+                    },
                 )
 
-                # Update entity if description changed
-                if summarized_desc != merged_node['description']:
-                    # Update graph storage
-                    await rag_instance.chunk_entity_relation_graph.upsert_node(
-                        a_entity_id,
-                        {'description': summarized_desc}
-                    )
+                # Step 2: Summarize merged entity description using same logic as normal insertion
+                merged_node = await rag_instance.chunk_entity_relation_graph.get_node(a_entity_id)
+                if merged_node and 'description' in merged_node and merged_node['description']:
+                    description_list = merged_node['description'].split('\n\n')
 
-                    # Update vector database
-                    entity_vdb_id = compute_mdhash_id(a_entity_id, prefix="ent-")
-                    entity_content = f"{a_entity_id}\n{summarized_desc}"
-
-                    await rag_instance.entities_vdb.upsert(
-                        {entity_vdb_id: {
-                            "content": entity_content,
-                            "entity_name": a_entity_id
-                        }}
-                    )
-
-                    summarization_stats["entities_summarized"] += 1
-                    if llm_used:
-                        summarization_stats["entity_llm_calls"] += 1
-
-            # Step 3: Summarize all related relationship descriptions
-            # Get all edges connected to the merged entity
-            edge_tuples = await rag_instance.chunk_entity_relation_graph.get_node_edges(a_entity_id)
-
-            if edge_tuples:
-                # Batch fetch all edge data in parallel
-                edge_data_tasks = [
-                    rag_instance.chunk_entity_relation_graph.get_edge(src_id, tgt_id)
-                    for src_id, tgt_id in edge_tuples
-                ]
-                all_edges = await asyncio.gather(*edge_data_tasks)
-
-                # Prepare summarization tasks
-                async def process_relationship(edge, src_id, tgt_id):
-                    if not edge or 'description' not in edge:
-                        return None
-
-                    description = edge['description']
-                    description_list = description.split('\n\n')
-
-                    # Use same summarization logic for relationships
+                    # Use the same summarization logic as normal entity insertion
                     summarized_desc, llm_used = await _handle_entity_relation_summary(
-                        description_type="Relationship",
-                        entity_or_relation_name=f"{src_id} -> {tgt_id}",
+                        description_type="Entity",
+                        entity_or_relation_name=a_entity_id,
                         description_list=description_list,
                         global_config=global_config,
                         llm_response_cache=rag_instance.llm_response_cache,
                         seperator="\n\n"
                     )
 
-                    # Only return update data if description changed
-                    if summarized_desc != description:
-                        return {
-                            'src_id': src_id,
-                            'tgt_id': tgt_id,
-                            'edge': edge,
-                            'summarized_desc': summarized_desc,
-                            'llm_used': llm_used
-                        }
-                    return None
-
-                # Process all relationships in parallel
-                relationship_tasks = [
-                    process_relationship(edge, src_id, tgt_id)
-                    for edge, (src_id, tgt_id) in zip(all_edges, edge_tuples)
-                ]
-                relationship_results = await asyncio.gather(*relationship_tasks)
-
-                # Filter out None results and batch update
-                updates_to_apply = [r for r in relationship_results if r is not None]
-
-                if updates_to_apply:
-                    # Batch update graph storage
-                    graph_update_tasks = [
-                        rag_instance.chunk_entity_relation_graph.upsert_edge(
-                            update['src_id'],
-                            update['tgt_id'],
-                            {**update['edge'], 'description': update['summarized_desc']}
+                    # Update entity if description changed
+                    if summarized_desc != merged_node['description']:
+                        # Update graph storage
+                        await rag_instance.chunk_entity_relation_graph.upsert_node(
+                            a_entity_id,
+                            {'description': summarized_desc}
                         )
-                        for update in updates_to_apply
-                    ]
 
-                    # Batch update vector database
-                    vdb_update_tasks = [
-                        rag_instance.relationships_vdb.upsert(
-                            {compute_mdhash_id(update['src_id'] + update['tgt_id'], prefix="rel-"): {
-                                "src_id": update['src_id'],
-                                "tgt_id": update['tgt_id'],
-                                "content": f"{update['edge'].get('keywords', '')}\\t{update['src_id']}\\n{update['tgt_id']}\\n{update['summarized_desc']}"
+                        # Update vector database
+                        entity_vdb_id = compute_mdhash_id(a_entity_id, prefix="ent-")
+                        entity_content = f"{a_entity_id}\n{summarized_desc}"
+
+                        await rag_instance.entities_vdb.upsert(
+                            {entity_vdb_id: {
+                                "content": entity_content,
+                                "entity_name": a_entity_id
                             }}
                         )
-                        for update in updates_to_apply
+
+                        summarization_stats["entities_summarized"] += 1
+                        if llm_used:
+                            summarization_stats["entity_llm_calls"] += 1
+
+                # Step 3: Summarize all related relationship descriptions
+                # Get all edges connected to the merged entity
+                edge_tuples = await rag_instance.chunk_entity_relation_graph.get_node_edges(a_entity_id)
+
+                if edge_tuples:
+                    # Batch fetch all edge data in parallel
+                    edge_data_tasks = [
+                        rag_instance.chunk_entity_relation_graph.get_edge(src_id, tgt_id)
+                        for src_id, tgt_id in edge_tuples
                     ]
+                    all_edges = await asyncio.gather(*edge_data_tasks)
 
-                    # Execute all updates in parallel
-                    await asyncio.gather(*graph_update_tasks, *vdb_update_tasks)
+                    # Prepare summarization tasks
+                    async def process_relationship(edge, src_id, tgt_id):
+                        if not edge or 'description' not in edge:
+                            return None
 
-                    # Update statistics
-                    summarization_stats["relations_summarized"] += len(updates_to_apply)
-                    summarization_stats["relation_llm_calls"] += sum(
-                        1 for update in updates_to_apply if update['llm_used']
-                    )
+                        description = edge['description']
+                        description_list = description.split('\n\n')
 
-            # print(f"TOOL COMPLETED: Merge {b_entity_id} -> {a_entity_id}")
-            return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
-        except Exception as e:
-            print(f"TOOL FAILED: Merge {b_entity_id} -> {a_entity_id}, Error: {str(e)}")
-            return f"Merge failed: {str(e)}"
+                        # Use same summarization logic for relationships
+                        summarized_desc, llm_used = await _handle_entity_relation_summary(
+                            description_type="Relationship",
+                            entity_or_relation_name=f"{src_id} -> {tgt_id}",
+                            description_list=description_list,
+                            global_config=global_config,
+                            llm_response_cache=rag_instance.llm_response_cache,
+                            seperator="\n\n"
+                        )
+
+                        # Only return update data if description changed
+                        if summarized_desc != description:
+                            return {
+                                'src_id': src_id,
+                                'tgt_id': tgt_id,
+                                'edge': edge,
+                                'summarized_desc': summarized_desc,
+                                'llm_used': llm_used
+                            }
+                        return None
+
+                    # Process all relationships in parallel
+                    relationship_tasks = [
+                        process_relationship(edge, src_id, tgt_id)
+                        for edge, (src_id, tgt_id) in zip(all_edges, edge_tuples)
+                    ]
+                    relationship_results = await asyncio.gather(*relationship_tasks)
+
+                    # Filter out None results and batch update
+                    updates_to_apply = [r for r in relationship_results if r is not None]
+
+                    if updates_to_apply:
+                        # Batch update graph storage
+                        graph_update_tasks = [
+                            rag_instance.chunk_entity_relation_graph.upsert_edge(
+                                update['src_id'],
+                                update['tgt_id'],
+                                {**update['edge'], 'description': update['summarized_desc']}
+                            )
+                            for update in updates_to_apply
+                        ]
+
+                        # Batch update vector database
+                        vdb_update_tasks = [
+                            rag_instance.relationships_vdb.upsert(
+                                {compute_mdhash_id(update['src_id'] + update['tgt_id'], prefix="rel-"): {
+                                    "src_id": update['src_id'],
+                                    "tgt_id": update['tgt_id'],
+                                    "content": f"{update['edge'].get('keywords', '')}\\t{update['src_id']}\\n{update['tgt_id']}\\n{update['summarized_desc']}"
+                                }}
+                            )
+                            for update in updates_to_apply
+                        ]
+
+                        # Execute all updates in parallel
+                        await asyncio.gather(*graph_update_tasks, *vdb_update_tasks)
+
+                        # Update statistics
+                        summarization_stats["relations_summarized"] += len(updates_to_apply)
+                        summarization_stats["relation_llm_calls"] += sum(
+                            1 for update in updates_to_apply if update['llm_used']
+                        )
+
+                # print(f"TOOL COMPLETED: Merge {b_entity_id} -> {a_entity_id}")
+                return f"Merge successfully: {a_entity_id} <- {b_entity_id}"
+            except Exception as e:
+                print(f"TOOL FAILED: Merge {b_entity_id} -> {a_entity_id}, Error: {str(e)}")
+                return f"Merge failed: {str(e)}"
 
     # Bind tools to LLM
     llm_with_tools = llm.bind_tools([merge_entities_tool])
@@ -560,16 +583,26 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         async with llm_semaphore:
             return await llm_with_tools.ainvoke(messages)
 
-    pending_tasks: list[dict[str, Any]] = []
+    # Concurrent task management with LLM call tracking
+    pending_evaluations: list[dict[str, Any]] = []   # Tasks waiting for LLM evaluation
+    pending_merges: list[dict[str, Any]] = []         # Tasks ready to merge (evaluation complete)
     cached_pairs_to_apply: list[dict[str, Any]] = []  # Collect cached merge pairs
 
-    async def process_next_pending_task():
-        nonlocal llm_evaluated_pairs, merged_pairs, cached_merges, cached_skips, skipped_already_merged
+    active_evaluation_count = 0  # Count of ongoing LLM evaluations
+    active_merge_count = 0       # Count of ongoing merges (includes LLM summarization)
 
-        if not pending_tasks:
-            return
+    def get_active_llm_count() -> int:
+        """Get total number of active LLM calls (evaluations + merges)"""
+        return active_evaluation_count + active_merge_count
 
-        task_info = pending_tasks.pop(0)
+    def can_start_new_llm_task() -> bool:
+        """Check if we can start a new LLM task (evaluation or merge)"""
+        return get_active_llm_count() < llm_concurrency_limit
+
+    async def process_evaluation_result(task_info: dict):
+        """Process completed evaluation and optionally queue for merge"""
+        nonlocal llm_evaluated_pairs, merged_pairs, active_evaluation_count, active_entities
+
         task: asyncio.Task = task_info["task"]
         i = task_info["i"]
         j = task_info["j"]
@@ -579,12 +612,16 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
 
         try:
             response = await task
+            active_evaluation_count -= 1  # Evaluation LLM call complete
         except Exception as e:
+            active_evaluation_count -= 1
             print(f"Error processing pair ({entity_a_id}, {entity_b_id}): {str(e)}")
+            await schedule_next_tasks()  # Try to schedule more tasks
             return
 
         # Skip if entities already inactive (merged earlier)
         if i not in active_entities or j not in active_entities:
+            await schedule_next_tasks()  # Try to schedule more tasks
             return
 
         # Fetch current descriptions (after any prior merges)
@@ -595,6 +632,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             # Entities might have been removed due to earlier merges
             active_entities.discard(i)
             active_entities.discard(j)
+            await schedule_next_tasks()  # Try to schedule more tasks
             return
 
         current_desc_a = current_entity_a.get("description", "")
@@ -606,27 +644,74 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
         # Re-run LLM if entity descriptions changed since the initial evaluation
         if current_desc_a != desc_a_used or current_desc_b != desc_b_used:
             try:
+                active_evaluation_count += 1  # Re-evaluation LLM call starts
                 response = await evaluate_pair_llm(
                     entity_a_id,
                     entity_b_id,
                     current_desc_a,
                     current_desc_b,
                 )
+                active_evaluation_count -= 1  # Re-evaluation LLM call complete
                 desc_a_used = current_desc_a
                 desc_b_used = current_desc_b
             except Exception as e:
+                active_evaluation_count -= 1
                 print(f"Error re-evaluating pair ({entity_a_id}, {entity_b_id}): {str(e)}")
+                await schedule_next_tasks()  # Try to schedule more tasks
                 return
 
-        decision = "skipped"
-        merge_successful = False
+        llm_evaluated_pairs += 1
 
+        # Check if LLM decided to merge
         if hasattr(response, "tool_calls") and response.tool_calls:
-            print(
-                f"NEW MERGE: {entity_a_id} <- {entity_b_id} (similarity: {similarity:.3f})"
-            )
+            # Queue for merge
+            pending_merges.append({
+                "i": i,
+                "j": j,
+                "entity_a_id": entity_a_id,
+                "entity_b_id": entity_b_id,
+                "similarity": similarity,
+                "desc_a_used": desc_a_used,
+                "desc_b_used": desc_b_used,
+                "tool_calls": response.tool_calls
+            })
+        else:
+            # Cache skip decision
+            content_a_final = f"{entity_a_id}|{desc_a_used}"
+            content_b_final = f"{entity_b_id}|{desc_b_used}"
+            hash_a_final = hashlib.md5(content_a_final.encode("utf-8")).hexdigest()
+            hash_b_final = hashlib.md5(content_b_final.encode("utf-8")).hexdigest()
+            entity_pair_id_final = f"{min(entity_a_id, entity_b_id)}||{max(entity_a_id, entity_b_id)}"
 
-            for call in response.tool_calls:
+            entity_pair_cache[entity_pair_id_final] = {
+                "hash_a": hash_a_final,
+                "hash_b": hash_b_final,
+                "decision": "skipped",
+                "similarity": float(similarity),
+                "timestamp": time_module.strftime("%Y-%m-%d %H:%M:%S"),
+                "entity_a_id": entity_a_id,
+                "entity_b_id": entity_b_id,
+            }
+
+        # Evaluation complete, try to schedule more tasks
+        await schedule_next_tasks()
+
+    async def execute_merge_task(merge_info: dict):
+        """Execute merge operation (including LLM summarization)"""
+        nonlocal merged_pairs, active_merge_count, entities, active_entities
+
+        entity_a_id = merge_info["entity_a_id"]
+        entity_b_id = merge_info["entity_b_id"]
+        similarity = merge_info["similarity"]
+        i = merge_info["i"]
+        j = merge_info["j"]
+
+        try:
+            print(f"NEW MERGE: {entity_a_id} <- {entity_b_id} (similarity: {similarity:.3f})")
+
+            active_merge_count += 1  # Merge (with LLM summarization) starts
+
+            for call in merge_info["tool_calls"]:
                 if call["name"] == "merge_entities_tool":
                     try:
                         merge_result = await merge_entities_tool.ainvoke(call["args"])
@@ -637,10 +722,10 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
                         merge_successful = False
                         break
 
+            active_merge_count -= 1  # Merge complete
+
             if merge_successful:
-                updated_node = await rag_instance.chunk_entity_relation_graph.get_node(
-                    entity_a_id
-                )
+                updated_node = await rag_instance.chunk_entity_relation_graph.get_node(entity_a_id)
                 if updated_node and "description" in updated_node:
                     new_desc = updated_node["description"]
                     entities[i]["description"] = new_desc
@@ -651,13 +736,18 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             else:
                 decision = "skipped"
 
-        # Cache decision using entity pair ID and description hashes
+        except Exception as e:
+            active_merge_count -= 1
+            print(f"Error executing merge ({entity_a_id}, {entity_b_id}): {str(e)}")
+            decision = "skipped"
+
+        # Cache decision
+        desc_a_used = merge_info["desc_a_used"]
+        desc_b_used = merge_info["desc_b_used"]
         content_a_final = f"{entity_a_id}|{desc_a_used}"
         content_b_final = f"{entity_b_id}|{desc_b_used}"
         hash_a_final = hashlib.md5(content_a_final.encode("utf-8")).hexdigest()
         hash_b_final = hashlib.md5(content_b_final.encode("utf-8")).hexdigest()
-
-        # Create entity pair ID (based on entity IDs, not description hashes)
         entity_pair_id_final = f"{min(entity_a_id, entity_b_id)}||{max(entity_a_id, entity_b_id)}"
 
         entity_pair_cache[entity_pair_id_final] = {
@@ -670,8 +760,54 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             "entity_b_id": entity_b_id,
         }
 
-        # Update statistics for LLM evaluations (count once per final evaluation)
-        llm_evaluated_pairs += 1
+        # Merge complete, try to schedule more tasks
+        await schedule_next_tasks()
+
+    def find_next_available_merge() -> dict | None:
+        """Find first merge task that doesn't require waiting for locks"""
+        nonlocal active_entities
+
+        for idx, merge_info in enumerate(pending_merges):
+            entity_a_id = merge_info["entity_a_id"]
+            entity_b_id = merge_info["entity_b_id"]
+
+            # Check if entities are still active
+            i = merge_info["i"]
+            j = merge_info["j"]
+            if i not in active_entities or j not in active_entities:
+                # Skip this task, remove from queue
+                pending_merges.pop(idx)
+                return None  # Try again with next iteration
+
+            # Check if entities are locked
+            if not lock_mgr.is_any_locked(entity_a_id, entity_b_id):
+                # Found an available merge task
+                return pending_merges.pop(idx)
+
+        # All tasks are blocked or queue is empty
+        return None
+
+    async def schedule_next_tasks():
+        """Schedule next available evaluation or merge tasks"""
+        nonlocal active_evaluation_count, active_merge_count
+
+        # Try to start new merge tasks (priority: clear pending merges first)
+        while can_start_new_llm_task() and pending_merges:
+            merge_info = find_next_available_merge()
+            if merge_info is None:
+                # All pending merges are blocked
+                break
+
+            # Start merge task in background
+            asyncio.create_task(execute_merge_task(merge_info))
+
+        # Try to start new evaluation tasks
+        while can_start_new_llm_task() and pending_evaluations:
+            task_info = pending_evaluations.pop(0)
+            active_evaluation_count += 1
+
+            # Process evaluation in background
+            asyncio.create_task(process_evaluation_result(task_info))
 
     # Pre-compute entity description hashes for cache comparison
     print(f"Pre-computing entity description hashes...")
@@ -682,22 +818,11 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
 
     logger.info(f"Pre-computed {len(entity_hashes)} entity description hashes")
 
-    # Process all candidate pairs with progress bar
-    pbar = atqdm(
-        candidate_pairs,
-        desc="Processing candidate pairs",
-        total=len(candidate_pairs),
-        unit="pair"
-    )
+    # Pre-filter and queue candidate pairs
+    print("Filtering and queueing candidate pairs...")
+    pairs_to_evaluate = []
 
-    for i, j, similarity in pbar:
-        # Update progress bar with current statistics
-        pbar.set_postfix({
-            'merged': merged_pairs,
-            'cached': cached_merges,
-            'llm_eval': llm_evaluated_pairs
-        })
-
+    for i, j, similarity in candidate_pairs:
         # Skip if either entity has already been merged
         if i not in active_entities or j not in active_entities:
             continue
@@ -757,10 +882,44 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             logger.debug(f"New pair (not in cache): {entity_a_id} vs {entity_b_id}")
 
         # If we reach here, we need LLM evaluation
-        if not should_evaluate:
-            continue
+        if should_evaluate:
+            pairs_to_evaluate.append((i, j, similarity, entity_a, entity_b))
 
-        # Schedule new LLM evaluation with concurrency control
+    print(f"Queued {len(pairs_to_evaluate)} pairs for LLM evaluation (after cache filtering)")
+
+    # Process pairs with progress bar showing actual work
+    total_work_items = len(pairs_to_evaluate)
+    completed_items = 0
+
+    pbar = atqdm(
+        total=total_work_items,
+        desc="Evaluating & merging pairs",
+        unit="pair"
+    )
+
+    # Track completed tasks to update progress
+    completed_evaluations = 0
+    last_completed = 0
+
+    async def update_progress():
+        """Update progress bar based on completed evaluations"""
+        nonlocal completed_evaluations, last_completed
+        current_completed = llm_evaluated_pairs
+        if current_completed > last_completed:
+            delta = current_completed - last_completed
+            pbar.update(delta)
+            last_completed = current_completed
+            pbar.set_postfix({
+                'merged': merged_pairs,
+                'cached': cached_merges,
+                'eval': llm_evaluated_pairs,
+                'pending': len(pending_evaluations) + len(pending_merges),
+                'active': get_active_llm_count()
+            })
+
+    # Start queueing evaluation tasks
+    for i, j, similarity, entity_a, entity_b in pairs_to_evaluate:
+        # Schedule new LLM evaluation
         task = asyncio.create_task(
             evaluate_pair_llm(
                 entity_a["entity_id"],
@@ -770,7 +929,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             )
         )
 
-        pending_tasks.append(
+        pending_evaluations.append(
             {
                 "task": task,
                 "i": i,
@@ -783,24 +942,25 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             }
         )
 
-        # If concurrency limit reached, process the oldest pending task
-        if len(pending_tasks) >= llm_concurrency_limit:
-            await process_next_pending_task()
+        # Schedule next available tasks
+        await schedule_next_tasks()
 
-    # Process remaining pending evaluations (continue using main progress bar)
-    if pending_tasks:
-        # Update progress bar description to indicate finalizing phase
-        pbar.set_description(f"Processing pairs (finalizing {len(pending_tasks)} evals)")
+        # Update progress periodically
+        await update_progress()
 
-        while pending_tasks:
-            await process_next_pending_task()
-            # Continue updating main progress bar with current statistics
-            pbar.set_postfix({
-                'merged': merged_pairs,
-                'cached': cached_merges,
-                'llm_eval': llm_evaluated_pairs,  # Will increase from initial value to final count
-                'remaining': len(pending_tasks)   # Will decrease to 0
-            })
+    # Process remaining pending tasks (evaluations and merges)
+    while len(pending_evaluations) > 0 or len(pending_merges) > 0 or get_active_llm_count() > 0:
+        # Try to schedule more tasks
+        await schedule_next_tasks()
+
+        # Wait a bit to let tasks progress
+        await asyncio.sleep(0.1)
+
+        # Update progress bar
+        await update_progress()
+
+    # Final update
+    await update_progress()
 
     # Close the main progress bar only after ALL tasks are done
     pbar.close()

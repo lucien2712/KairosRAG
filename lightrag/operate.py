@@ -1094,6 +1094,7 @@ async def _retry_malformed_extraction(
     retry_user_prompt = user_prompt_base + f"\n\nRETRY CONTEXT:\nYour previous extraction contained malformed records: {malformed_records}\nPlease re-extract ALL entities and relationships from the text above, ensuring correct format."
 
     for attempt in range(max_retries):
+        logger.info(f"Retry attempt {attempt + 1}/{max_retries} for {chunk_key}")
         try:
             # Retry attempt in progress
 
@@ -1130,11 +1131,19 @@ async def _retry_malformed_extraction(
 
                 logger.info(f"Retry successful: recovered {len(retry_nodes_attempt)} entities + {len(retry_edges_attempt)} relationships")
                 break
+            else:
+                logger.warning(f"Retry attempt {attempt + 1} returned no valid entities/relationships for {chunk_key}")
 
         except Exception as e:
             logger.warning(f"Retry attempt {attempt + 1} failed for {chunk_key}: {e}")
             if attempt == max_retries - 1:
                 logger.error(f"All retry attempts failed for {chunk_key}")
+
+    # Log final retry result summary
+    if retry_nodes or retry_edges:
+        logger.info(f"Retry completed: total recovered {len(retry_nodes)} unique entities + {len(retry_edges)} unique relationships")
+    else:
+        logger.warning(f"All retry attempts for {chunk_key} failed to recover any valid records")
 
     return dict(retry_nodes), dict(retry_edges)
 
@@ -2492,6 +2501,7 @@ async def extract_entities(
             history += pack_user_ass_to_openai_messages(continue_prompt, glean_result)
 
             # Process gleaning result separately with file path and timestamp
+            # Changed: is_retry=False to allow malformed records collection in gleaning stage
             glean_nodes, glean_edges = await _process_extraction_result(
                 glean_result,
                 chunk_key,
@@ -2500,8 +2510,38 @@ async def extract_entities(
                 tuple_delimiter=context_base["tuple_delimiter"],
                 record_delimiter=context_base["record_delimiter"],
                 completion_delimiter=context_base["completion_delimiter"],
-                is_retry=True,  # Prevent malformed records check in gleaning stage
+                is_retry=False,  # Allow malformed records collection in gleaning stage
             )
+
+            # Check for malformed records in gleaning stage and retry if needed
+            glean_malformed_records = glean_nodes.pop("__MALFORMED_RECORDS__", [])
+            if glean_malformed_records:
+                logger.info(f"Retrying {len(glean_malformed_records)} malformed records from gleaning in {chunk_key}")
+                glean_retry_nodes, glean_retry_edges = await _retry_malformed_extraction(
+                    content,  # original chunk content
+                    f"{chunk_key}_glean",
+                    file_path,
+                    timestamp,
+                    glean_malformed_records,
+                    use_llm_func,
+                    context_base,
+                    system_prompt_cacheable,
+                    llm_response_cache=llm_response_cache,
+                    max_retries=entity_extract_max_retries,
+                )
+
+                # Merge gleaning retry results with gleaning results
+                for entity_name, entities in glean_retry_nodes.items():
+                    if entity_name == "__MALFORMED_RECORDS__":
+                        continue
+                    if entity_name not in glean_nodes:
+                        glean_nodes[entity_name] = []
+                    glean_nodes[entity_name].extend(entities)
+
+                for edge_key, edges in glean_retry_edges.items():
+                    if edge_key not in glean_edges:
+                        glean_edges[edge_key] = []
+                    glean_edges[edge_key].extend(edges)
 
             # Merge results - only add entities and edges with new names
             for entity_name, entities in glean_nodes.items():
