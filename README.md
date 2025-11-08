@@ -238,16 +238,15 @@ response = rag.query(query, param=QueryParam(
 
 KairosRAG extends **LightRAG** with:
 
-1. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
-2. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Context-aware FastRP structural similarity providing complementary retrieval perspectives.
-3. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
-4. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
-5. **Context Recognition Filtering** – LLM-based relevance filtering to remove query-irrelevant entities/relations.
+1. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Context-aware FastRP structural similarity providing complementary retrieval perspectives.
+2. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
+3. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
+4. **Context Recognition Filtering** – LLM-based relevance filtering to remove query-irrelevant entities/relations.
+5. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
 6. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.
 
 ---
 
 ## 🙏 Acknowledgments
 
-KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License).
-We extend it with **time-awareness, three-perspective expansion architecture, adaptive schema induction, and agentic entity management**.
+KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License). We deeply appreciate their foundational work in graph-based RAG systems. We extend it with **Three-Perspective Expansion Architecture, Adaptive Entity Type Discovery, Agentic Entity Canonicalization, Context Recognition Filtering, Automatic Timestamp Integration, Table-Aware Document Processing**
