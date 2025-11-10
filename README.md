@@ -1,13 +1,13 @@
-# KairosRAG
+# PrismRAG: Decomposing Queries into Complementary Perspectives for Adaptive Graph Retrieval
 
-**KairosRAG** is an enhanced framework built on top of [LightRAG](https://github.com/HKUDS/LightRAG), introducing **time-awareness, three-perspective retrieval expansion, adaptive schema induction, and agentic entity management** for domain-specific and temporally-sensitive knowledge graphs.
+**PrismRAG** refracts queries like light through a prism—decomposing them into three complementary perspectives (semantic traversal, global importance, and structural similarity), then recomposing the scattered insights into comprehensive answers. Built on [LightRAG](https://github.com/HKUDS/LightRAG), PrismRAG extends graph-based retrieval with adaptive schema discovery and intelligent entity merging.
 
 ## 🚀 Key Contributions
 
 ### 🔍 **Three-Perspective Expansion Architecture**
 
 * **Problem**: LightRAG primarily supports one-hop expansion, limiting indirect but meaningful reasoning.
-* **Solution**: KairosRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Context-aware FastRP embeddings with edge weights.
+* **Solution**: PrismRAG employs a **three-perspective expansion approach** that processes queries from complementary angles: semantic multi-hop traversal, global importance ranking via Query-aware Personalized PageRank, and structural similarity through Context-aware FastRP embeddings with edge weights.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **🏗️ Architecture Overview:**
@@ -54,7 +54,7 @@ where $S = D^{-1/2}A_{weighted}D^{-1/2}$, $A_{weighted}$ uses original Graph edg
 ### 🧠 **Adaptive Entity Type Discovery**
 
 * **Problem**: Predefined static schemas (e.g., Person, Organization, Category) often misclassify domain-specific metrics (e.g., EPS, Operating Margin).
-* **Solution**: KairosRAG dynamically suggests and augments **domain-specific entity types** during extraction, improving recognition accuracy and retrieval relevance.
+* **Solution**: PrismRAG dynamically suggests and augments **domain-specific entity types** during extraction, improving recognition accuracy and retrieval relevance.
 
 **Usage Examples:**
 
@@ -74,10 +74,10 @@ result = rag.entity_type_aug(texts=documents, force_refresh=True)
 ```
 
 
-### ⚡ **Agentic Entity Canonicalization**
+### ⚡ **Agentic Entity Merging**
 
 * **Problem**: Duplicate entities scatter knowledge and reduce retrieval precision.
-* **Solution**: KairosRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion**.
+* **Solution**: PrismRAG combines **vector similarity pre-filtering** with **LLM-based reasoning** for intelligent entity deduplication. The system now supports **automatic merging during insertion**.
 * *Currently implemented for the NanoVectorDB backend.*
 
 **Mathematical Framework:**
@@ -99,7 +99,7 @@ $$entity_{final} = Merge(e_i, e_j) \text{ if } M(e_i, e_j) = \text{True}$$
 ### 🎯 **Context Recognition Filtering**
 
 * **Problem**: Retrieved entities and relations often contain noise irrelevant to the query, wasting tokens and diluting LLM focus on critical information.
-* **Solution**: KairosRAG employs **LLM-based relevance filtering** that removes irrelevant entities/relations, while preserving multi-hop reasoning paths and contextual information.
+* **Solution**: PrismRAG employs **LLM-based relevance filtering** that removes irrelevant entities/relations, while preserving multi-hop reasoning paths and contextual information.
 
 **Mathematical Framework:**
 
@@ -116,7 +116,7 @@ $$E_{filtered} = \{e_i \in E_{retrieved} | R(e_i) = \text{False}\}$$
 ### ⏳ **Automatic Timestamp Integration**
 
 * **Problem**: Time-sensitive documents lose context when temporal information is inconsistent.
-* **Solution**: KairosRAG automatically prefixes user-provided timestamps to entity and relation descriptions, ensuring consistent temporal alignment without relying on LLM memory.
+* **Solution**: PrismRAG automatically prefixes user-provided timestamps to entity and relation descriptions, ensuring consistent temporal alignment without relying on LLM memory.
 
 **Mathematical Framework:**
 
@@ -152,15 +152,15 @@ When accumulated descriptions exceed n tokens (e.g., after inserting 10+ quarter
 ### 📊 **Table-Aware Document Processing**
 
 * **Problem**: HTML tables in documents get fragmented during traditional chunking, causing loss of structural relationships and data integrity that are crucial for understanding financial reports, research papers, and structured documents.
-* **Solution**: KairosRAG implements intelligent **table-aware chunking** that preserves complete `<table>...</table>` structures within single chunks, automatically includes surrounding context, and employs **table-enhanced entity extraction** with specialized prompts for tabular data.
+* **Solution**: PrismRAG implements intelligent **table-aware chunking** that preserves complete `<table>...</table>` structures within single chunks, automatically includes surrounding context, and employs **table-enhanced entity extraction** with specialized prompts for tabular data.
 
 ---
 
 ## 🛠️ Installation
 
 ```bash
-git clone https://github.com/lucien2712/KairosRAG.git
-cd KairosRAG
+git clone https://github.com/lucien2712/PrismRAG.git
+cd PrismRAG
 pip install -e .
 ```
 
@@ -174,7 +174,7 @@ from lightrag import LightRAG, QueryParam
 from lightrag.llm.openai import gpt_4o_mini_complete, openai_embed
 
 async def main():
-    # Initialize KairosRAG
+    # Initialize PrismRAG
     rag = LightRAG(
         working_dir="./rag_storage",
         llm_model_func=gpt_4o_mini_complete,
@@ -236,11 +236,11 @@ response = rag.query(query, param=QueryParam(
 
 ## 🤝 Contributing
 
-KairosRAG extends **LightRAG** with:
+PrismRAG extends **LightRAG** with:
 
 1. **Three-Perspective Expansion** – Multi-hop traversal, Query-aware Personalized PageRank, and Context-aware FastRP structural similarity providing complementary retrieval perspectives.
 2. **Adaptive Entity Type Discovery** – Dynamic schema induction for domain-specific contexts.
-3. **Agentic Entity Canonicalization** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
+3. **Agentic Entity Merging** – Hybrid vector+LLM pipeline with cosine similarity pre-filtering and confidence thresholding.
 4. **Context Recognition Filtering** – LLM-based relevance filtering to remove query-irrelevant entities/relations.
 5. **Automatic Timestamp Integration** – Consistent temporal metadata injection with mathematical prefix functions.
 6. **Table-Aware Document Processing** – Intelligent table detection, structure preservation, and context-aware chunking with specialized entity extraction for tabular data.
@@ -249,4 +249,4 @@ KairosRAG extends **LightRAG** with:
 
 ## 🙏 Acknowledgments
 
-KairosRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License). We deeply appreciate their foundational work in graph-based RAG systems. We extend it with **Three-Perspective Expansion Architecture, Adaptive Entity Type Discovery, Agentic Entity Canonicalization, Context Recognition Filtering, Automatic Timestamp Integration, Table-Aware Document Processing**
+PrismRAG builds upon [LightRAG](https://github.com/HKUDS/LightRAG) by the HKUDS team (MIT License). We deeply appreciate their foundational work in graph-based RAG systems. We extend it with **Three-Perspective Expansion Architecture, Adaptive Entity Type Discovery, Agentic Entity Merging, Context Recognition Filtering, Automatic Timestamp Integration, Table-Aware Document Processing**
