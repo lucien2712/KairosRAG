@@ -695,15 +695,14 @@ class NodeEmbeddingEnhancer:
                     # Normalize edge key for undirected graphs (lexicographic order)
                     normalized_key = (v, u) if u > v else (u, v)
 
-                    # Use similarity as weight if available, otherwise use original weight
+                    # Use similarity as weight if available, otherwise use fallback weight
                     if normalized_key in relation_similarities:
                         similarity = relation_similarities[normalized_key]
                         self.graph[u][v]['temp_weight'] = similarity
                         reweighted_edges += 1
                     else:
-                        # Use original weight for edges without embeddings
-                        original_weight = edge_data.get('weight', 1.0)
-                        self.graph[u][v]['temp_weight'] = original_weight
+                        # Fallback: use fixed small weight (not LLM-generated weight)
+                        self.graph[u][v]['temp_weight'] = 0.1
                         skipped_edges += 1
 
                 logger.info(f"Phase 2: Applied query-aware edge reweighting to {reweighted_edges}/{self.graph.number_of_edges()} edges")
