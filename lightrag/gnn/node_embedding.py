@@ -706,6 +706,8 @@ class NodeEmbeddingEnhancer:
                         skipped_edges += 1
 
                 logger.info(f"Phase 2: Applied query-aware edge reweighting to {reweighted_edges}/{self.graph.number_of_edges()} edges")
+                if skipped_edges > 0:
+                    logger.warning(f"Phase 2: {skipped_edges} edges without relation similarities, using fallback weight 0.1")
 
                 # Compute PageRank with temporary weights
                 ppr_scores = nx.pagerank(
