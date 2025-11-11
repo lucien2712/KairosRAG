@@ -180,9 +180,8 @@ class NodeEmbeddingEnhancer:
     async def _compute_fastrp_embeddings(self) -> Dict[str, np.ndarray]:
         """Compute FastRP embeddings using proper degree normalization and self-loops."""
         if len(self.graph.nodes()) < 2:
-            logger.warning("Graph too small for FastRP, using random embeddings")
-            return {node: np.random.normal(0, 0.1, self.config.embedding_dimension) 
-                   for node in self.graph.nodes()}
+            logger.warning("Graph too small for FastRP, returning empty embeddings")
+            return {}
             
         try:
             # Set random seed for reproducibility
@@ -248,9 +247,7 @@ class NodeEmbeddingEnhancer:
             
         except Exception as e:
             logger.error(f"Error computing FastRP embeddings: {e}")
-            # Fallback to random embeddings
-            return {node: np.random.normal(0, 0.1, self.config.embedding_dimension) 
-                   for node in self.graph.nodes()}
+            return {}
                    
     async def get_all_relations_cached(self, knowledge_graph_inst) -> List[Dict]:
         """Get all relations with caching to avoid repeated full-graph queries."""
