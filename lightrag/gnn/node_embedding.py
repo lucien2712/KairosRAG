@@ -675,7 +675,7 @@ class NodeEmbeddingEnhancer:
             else:
                 # Fallback to uniform weights
                 seed_weights = {seed: 1.0/len(valid_seeds) for seed in valid_seeds}
-                logger.debug(f"Using uniform seed weights for {len(valid_seeds)} seeds")
+                logger.warning(f"Phase 1: No entity similarities available, using uniform seed weights for {len(valid_seeds)} seeds")
 
             # Build personalization vector for all nodes
             for node in self.graph.nodes():
