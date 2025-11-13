@@ -1,4 +1,4 @@
-# PrismRAG: Decomposing Queries into Complementary Perspectives for Adaptive Graph Retrieval
+# PrismRAG: Multi-Perspective Query Decomposition for Adaptive Graph-Based Retrieval
 
 **PrismRAG** refracts queries like light through a prism—decomposing them into three complementary perspectives (semantic traversal, global importance, and structural similarity), then recomposing the scattered insights into comprehensive answers. Built on [LightRAG](https://github.com/HKUDS/LightRAG), PrismRAG extends graph-based retrieval with adaptive schema discovery and intelligent entity merging.
 
