@@ -28,6 +28,8 @@ dependencies = [
     "future",
     "httpx",
     "json_repair",
+    "langchain",
+    "langchain_core",
     "langchain_openai",
     "nano-vectordb",
     "nest_asyncio",
