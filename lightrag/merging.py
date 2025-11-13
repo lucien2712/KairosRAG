@@ -77,7 +77,7 @@ async def single_pass_agentic_merging(rag_instance, threshold: float = 0.8, lang
             entity_pair_cache = {}
 
     # Create LangChain callback for token tracking
-    from langchain.callbacks.base import BaseCallbackHandler
+    from langchain_core.callbacks.base import BaseCallbackHandler
 
     class TokenTrackingCallback(BaseCallbackHandler):
         """Callback to track token usage from LangChain LLM calls"""
